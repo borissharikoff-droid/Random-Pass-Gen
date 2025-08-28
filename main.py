@@ -69,6 +69,15 @@ def escape_markdown_v2(text):
         text = text.replace(char, f'\\{char}')
     return text
 
+def safe_monospace_password(password):
+    """Safely format password in monospace, handling all special characters"""
+    try:
+        # Try simple monospace first
+        return f"`{password}`"
+    except:
+        # If that fails, just return the password
+        return password
+
 async def init_database():
     """Initialize the database and create tables"""
     async with aiosqlite.connect(DATABASE_PATH) as db:
@@ -169,6 +178,33 @@ async def get_all_passwords_stats():
     except Exception as e:
         logger.error(f"Error getting stats: {e}")
         return {'total_passwords': 0, 'unique_users': 0, 'by_type': []}
+
+async def get_all_passwords_from_db(limit=50, offset=0):
+    """Get all passwords from database with pagination (admin function)"""
+    try:
+        async with aiosqlite.connect(DATABASE_PATH) as db:
+            cursor = await db.execute("""
+                SELECT user_id, username, first_name, last_name, password, generation_type, created_at 
+                FROM password_history 
+                ORDER BY created_at DESC 
+                LIMIT ? OFFSET ?
+            """, (limit, offset))
+            rows = await cursor.fetchall()
+            return rows
+    except Exception as e:
+        logger.error(f"Error getting all passwords: {e}")
+        return []
+
+async def get_total_passwords_count():
+    """Get total count of all passwords in database"""
+    try:
+        async with aiosqlite.connect(DATABASE_PATH) as db:
+            cursor = await db.execute("SELECT COUNT(*) FROM password_history")
+            count = await cursor.fetchone()
+            return count[0] if count else 0
+    except Exception as e:
+        logger.error(f"Error getting total count: {e}")
+        return 0
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """Send start message with inline keyboard"""
@@ -286,6 +322,15 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
         elif query.data == "noop":
             # Do nothing - just for page indicator button
             pass
+            
+        elif query.data.startswith("admin_all_page_"):
+            # Handle admin all passwords pagination
+            page = int(query.data.replace("admin_all_page_", ""))
+            await show_all_passwords_page(query, user_id, page)
+            
+        elif query.data in ["admin_menu", "admin_stats"]:
+            # Handle admin callbacks
+            await handle_admin_callbacks(query, user_id)
             
     except Exception as e:
         logger.error(f"Error in button_handler: {e}")
@@ -642,7 +687,8 @@ async def show_password_history_page(query, user_id, page=1):
                 formatted_date = created_at
             
             # Use monospace for passwords to make them copyable
-            history_text += f"{i}\\. `{password}`\n"
+            safe_password = safe_monospace_password(password)
+            history_text += f"{i}\\. {safe_password}\n"
             history_text += f"   📅 {formatted_date} \\| 🔧 {generation_type}\n\n"
         
         history_text += "_Tap any password to copy_"
@@ -688,7 +734,8 @@ async def show_password_history_page(query, user_id, page=1):
                 except:
                     formatted_date = created_at
                     
-                simple_history += f"{i}. `{password}`\n"
+                safe_password = safe_monospace_password(password)
+                simple_history += f"{i}. {safe_password}\n"
                 simple_history += f"   📅 {formatted_date} | 🔧 {generation_type}\n\n"
             
             simple_history += "Tap any password to copy"
@@ -856,11 +903,205 @@ async def stats_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
     
     await update.message.reply_text(stats_text, parse_mode=ParseMode.MARKDOWN_V2)
 
-async def main() -> None:
-    """Start the bot"""
-    # Initialize database first
-    await init_database()
+async def admin_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Admin command to view all passwords (restricted access)"""
+    user_id = update.effective_user.id
     
+    # Add your admin user IDs here
+    ADMIN_IDS = [123456789]  # Replace with actual admin Telegram IDs
+    
+    if user_id not in ADMIN_IDS:
+        await update.message.reply_text("❌ Access denied. This command is for administrators only.")
+        return
+    
+    # Create inline keyboard for admin functions
+    keyboard = [
+        [InlineKeyboardButton("📖 View All Passwords", callback_data="admin_all_page_1")],
+        [InlineKeyboardButton("📊 Detailed Stats", callback_data="admin_stats")]
+    ]
+    
+    reply_markup = InlineKeyboardMarkup(keyboard)
+    
+    await update.message.reply_text(
+        "🔧 *Admin Panel*\n\nChoose an option:",
+        reply_markup=reply_markup,
+        parse_mode=ParseMode.MARKDOWN_V2
+    )
+
+async def show_all_passwords_page(query, admin_user_id, page=1):
+    """Show all passwords with pagination (admin only)"""
+    # Verify admin access
+    ADMIN_IDS = [123456789]  # Replace with actual admin Telegram IDs
+    if admin_user_id not in ADMIN_IDS:
+        await query.answer("❌ Access denied")
+        return
+    
+    logger.info(f"Admin {admin_user_id} viewing all passwords page {page}")
+    
+    # Get total count from database
+    total_passwords = await get_total_passwords_count()
+    
+    if total_passwords == 0:
+        await query.edit_message_text(
+            text="📖 *All Passwords*\n\n❌ No passwords in database yet\\.",
+            parse_mode=ParseMode.MARKDOWN_V2
+        )
+        return
+    
+    # Pagination settings
+    passwords_per_page = 10
+    total_pages = (total_passwords + passwords_per_page - 1) // passwords_per_page
+    
+    # Ensure page is within bounds
+    page = max(1, min(page, total_pages))
+    
+    # Calculate offset for database query
+    offset = (page - 1) * passwords_per_page
+    
+    # Get passwords from database
+    passwords = await get_all_passwords_from_db(passwords_per_page, offset)
+    
+    # Build history text
+    try:
+        history_text = f"📖 *All Passwords* \\(Page {page}/{total_pages}\\)\n\n"
+        
+        for i, (user_id, username, first_name, last_name, password, generation_type, created_at) in enumerate(passwords, offset + 1):
+            # Format the datetime
+            try:
+                dt = datetime.fromisoformat(created_at.replace('Z', '+00:00'))
+                formatted_date = dt.strftime("%d.%m.%Y %H:%M")
+            except:
+                formatted_date = created_at
+            
+            # Format user info
+            user_info = f"@{username}" if username else f"{first_name or ''} {last_name or ''}".strip()
+            if not user_info:
+                user_info = f"ID:{user_id}"
+            
+            # Use monospace for passwords to make them copyable
+            safe_password = safe_monospace_password(password)
+            history_text += f"{i}\\. {safe_password}\n"
+            history_text += f"   👤 {user_info} \\| 📅 {formatted_date} \\| 🔧 {generation_type}\n\n"
+        
+        history_text += "_Tap any password to copy_"
+        
+        # Create pagination keyboard
+        keyboard = []
+        
+        # Pagination buttons
+        if total_pages > 1:
+            nav_buttons = []
+            if page > 1:
+                nav_buttons.append(InlineKeyboardButton("⬅️ Prev", callback_data=f"admin_all_page_{page-1}"))
+            if page < total_pages:
+                nav_buttons.append(InlineKeyboardButton("Next ➡️", callback_data=f"admin_all_page_{page+1}"))
+            
+            if nav_buttons:
+                keyboard.append(nav_buttons)
+            
+            # Page indicator
+            keyboard.append([InlineKeyboardButton(f"📄 {page}/{total_pages}", callback_data="noop")])
+        
+        # Back button
+        keyboard.append([InlineKeyboardButton("🔙 Admin Panel", callback_data="admin_menu")])
+        
+        reply_markup = InlineKeyboardMarkup(keyboard)
+        
+        await query.edit_message_text(
+            text=history_text,
+            reply_markup=reply_markup,
+            parse_mode=ParseMode.MARKDOWN_V2
+        )
+        
+    except Exception as e:
+        logger.error(f"Error showing all passwords page {page}: {e}")
+        # Fallback without markdown
+        try:
+            simple_history = f"📖 All Passwords (Page {page}/{total_pages})\n\n"
+            for i, (user_id, username, first_name, last_name, password, generation_type, created_at) in enumerate(passwords, offset + 1):
+                try:
+                    dt = datetime.fromisoformat(created_at.replace('Z', '+00:00'))
+                    formatted_date = dt.strftime("%d.%m.%Y %H:%M")
+                except:
+                    formatted_date = created_at
+                
+                user_info = f"@{username}" if username else f"{first_name or ''} {last_name or ''}".strip()
+                if not user_info:
+                    user_info = f"ID:{user_id}"
+                    
+                safe_password = safe_monospace_password(password)
+                simple_history += f"{i}. {safe_password}\n"
+                simple_history += f"   👤 {user_info} | 📅 {formatted_date} | 🔧 {generation_type}\n\n"
+            
+            keyboard = []
+            if total_pages > 1:
+                nav_buttons = []
+                if page > 1:
+                    nav_buttons.append(InlineKeyboardButton("⬅️ Prev", callback_data=f"admin_all_page_{page-1}"))
+                if page < total_pages:
+                    nav_buttons.append(InlineKeyboardButton("Next ➡️", callback_data=f"admin_all_page_{page+1}"))
+                if nav_buttons:
+                    keyboard.append(nav_buttons)
+            
+            keyboard.append([InlineKeyboardButton("🔙 Admin Panel", callback_data="admin_menu")])
+            reply_markup = InlineKeyboardMarkup(keyboard)
+            
+            await query.edit_message_text(
+                text=simple_history,
+                reply_markup=reply_markup,
+                parse_mode=ParseMode.MARKDOWN_V2
+            )
+            
+        except Exception as e2:
+            logger.error(f"Error in admin fallback: {e2}")
+            await query.edit_message_text("❌ Error displaying passwords. Check logs.")
+
+# Add handler for admin menu callback
+async def handle_admin_callbacks(query, user_id):
+    """Handle admin-specific callbacks"""
+    ADMIN_IDS = [123456789]  # Replace with actual admin Telegram IDs
+    if user_id not in ADMIN_IDS:
+        await query.answer("❌ Access denied")
+        return
+    
+    if query.data == "admin_menu":
+        keyboard = [
+            [InlineKeyboardButton("📖 View All Passwords", callback_data="admin_all_page_1")],
+            [InlineKeyboardButton("📊 Detailed Stats", callback_data="admin_stats")]
+        ]
+        
+        reply_markup = InlineKeyboardMarkup(keyboard)
+        
+        await query.edit_message_text(
+            "🔧 *Admin Panel*\n\nChoose an option:",
+            reply_markup=reply_markup,
+            parse_mode=ParseMode.MARKDOWN_V2
+        )
+    
+    elif query.data == "admin_stats":
+        stats = await get_all_passwords_stats()
+        
+        stats_text = f"""📊 *Detailed Statistics*
+
+🔐 Total passwords: {stats['total_passwords']}
+👥 Unique users: {stats['unique_users']}
+
+📈 By generation type:"""
+        
+        for _, _, gen_type, count in stats['by_type']:
+            stats_text += f"\n• {gen_type}: {count}"
+        
+        keyboard = [[InlineKeyboardButton("🔙 Admin Panel", callback_data="admin_menu")]]
+        reply_markup = InlineKeyboardMarkup(keyboard)
+        
+        await query.edit_message_text(
+            stats_text,
+            reply_markup=reply_markup,
+            parse_mode=ParseMode.MARKDOWN_V2
+        )
+
+def main() -> None:
+    """Start the bot"""
     # Create the Application
     application = Application.builder().token(BOT_TOKEN).build()
     
@@ -869,11 +1110,19 @@ async def main() -> None:
     application.add_handler(CommandHandler("help", help_command))
     application.add_handler(CommandHandler("debug", debug_command))
     application.add_handler(CommandHandler("stats", stats_command))
+    application.add_handler(CommandHandler("admin", admin_command))
     application.add_handler(CallbackQueryHandler(button_handler))
+    
+    # Initialize database
+    async def init_db():
+        await init_database()
+    
+    # Run database initialization
+    asyncio.get_event_loop().run_until_complete(init_db())
     
     # Run the bot using polling (works better for Railway)
     logger.info("Starting bot with polling...")
-    await application.run_polling(
+    application.run_polling(
         poll_interval=1.0,
         timeout=10,
         bootstrap_retries=5,
@@ -884,4 +1133,4 @@ async def main() -> None:
     )
 
 if __name__ == "__main__":
-    asyncio.run(main())
+    main()
