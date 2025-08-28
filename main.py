@@ -124,6 +124,7 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
             
         elif query.data == "detailed":
             # Show detailed options
+            logger.info(f"Detailed button pressed by user {user_id}")
             await show_detailed_options(query, user_id)
             
         elif query.data.startswith("toggle_"):
@@ -136,6 +137,7 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
             
         elif query.data == "generate_custom":
             # Generate custom password
+            logger.info(f"Generate custom button pressed by user {user_id}")
             await generate_custom_password(query, user_id)
             
         elif query.data == "back_to_main":
@@ -160,6 +162,7 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
 
 async def show_detailed_options(query, user_id):
     """Show detailed password generation options"""
+    logger.info(f"Showing detailed options for user {user_id}")
     # Initialize user settings if not exists
     if user_id not in user_settings:
         user_settings[user_id] = {
@@ -204,30 +207,47 @@ async def show_detailed_options(query, user_id):
 
 Configure your password options:"""
     
-    await query.edit_message_text(
-        text=message_text,
-        reply_markup=reply_markup,
-        parse_mode=ParseMode.MARKDOWN_V2
-    )
+    try:
+        await query.edit_message_text(
+            text=message_text,
+            reply_markup=reply_markup,
+            parse_mode=ParseMode.MARKDOWN_V2
+        )
+        logger.info(f"Successfully showed detailed options for user {user_id}")
+    except Exception as e:
+        logger.error(f"Error showing detailed options: {e}")
+        # Fallback without markdown
+        simple_text = "🔧 Detailed Password Settings\n\nConfigure your password options:"
+        await query.edit_message_text(
+            text=simple_text,
+            reply_markup=reply_markup
+        )
 
 async def handle_toggle(query, user_id):
     """Handle toggle button presses"""
-    toggle_type = query.data.replace("toggle_", "")
-    
-    if user_id not in user_settings:
-        user_settings[user_id] = {
-            'length': 12,
-            'lowercase': True,
-            'uppercase': True,
-            'digits': True,
-            'symbols': True
-        }
-    
-    # Toggle the setting
-    user_settings[user_id][toggle_type] = not user_settings[user_id][toggle_type]
-    
-    # Refresh the detailed options menu
-    await show_detailed_options(query, user_id)
+    try:
+        toggle_type = query.data.replace("toggle_", "")
+        logger.info(f"Toggle {toggle_type} pressed by user {user_id}")
+        
+        if user_id not in user_settings:
+            user_settings[user_id] = {
+                'length': 12,
+                'lowercase': True,
+                'uppercase': True,
+                'digits': True,
+                'symbols': True
+            }
+        
+        # Toggle the setting
+        user_settings[user_id][toggle_type] = not user_settings[user_id][toggle_type]
+        logger.info(f"Toggled {toggle_type} to {user_settings[user_id][toggle_type]} for user {user_id}")
+        
+        # Refresh the detailed options menu
+        await show_detailed_options(query, user_id)
+        
+    except Exception as e:
+        logger.error(f"Error in handle_toggle: {e}")
+        await query.answer("Произошла ошибка при переключении настройки.")
 
 async def handle_length_selection(query, user_id):
     """Handle length selection"""
@@ -264,6 +284,7 @@ async def handle_length_selection(query, user_id):
 
 async def generate_custom_password(query, user_id):
     """Generate custom password based on user settings"""
+    logger.info(f"Generating custom password for user {user_id}")
     if user_id not in user_settings:
         user_settings[user_id] = {
             'length': 12,
@@ -320,11 +341,21 @@ async def generate_custom_password(query, user_id):
 
 _Tap the password to copy_"""
     
-    await query.edit_message_text(
-        text=message_text,
-        reply_markup=reply_markup,
-        parse_mode=ParseMode.MARKDOWN_V2
-    )
+    try:
+        await query.edit_message_text(
+            text=message_text,
+            reply_markup=reply_markup,
+            parse_mode=ParseMode.MARKDOWN_V2
+        )
+        logger.info(f"Successfully generated custom password for user {user_id}")
+    except Exception as e:
+        logger.error(f"Error generating custom password: {e}")
+        # Fallback without markdown
+        simple_text = f"🔐 Your custom password:\n\n{password}\n\nLength: {settings['length']}\n\nTap the password to copy"
+        await query.edit_message_text(
+            text=simple_text,
+            reply_markup=reply_markup
+        )
 
 async def start_from_callback(query):
     """Start command from callback query"""
@@ -495,11 +526,12 @@ Passwords are generated locally\\. History is stored temporarily during bot sess
     )
 
 async def debug_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    """Debug command to check history"""
+    """Debug command to check history and settings"""
     user_id = update.effective_user.id
     history_count = len(user_password_history.get(user_id, []))
+    settings = user_settings.get(user_id, "No settings")
     
-    debug_text = f"🔍 Debug Info:\n\nUser ID: {user_id}\nPasswords in history: {history_count}\n\nHistory data:\n{user_password_history.get(user_id, [])}"
+    debug_text = f"🔍 Debug Info:\n\nUser ID: {user_id}\nPasswords in history: {history_count}\nUser settings: {settings}\n\nHistory data:\n{user_password_history.get(user_id, [])}"
     
     await update.message.reply_text(debug_text)
 
