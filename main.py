@@ -2,6 +2,9 @@ import logging
 import random
 import string
 import os
+import aiosqlite
+import asyncio
+from datetime import datetime
 from telegram import InlineKeyboardButton, InlineKeyboardMarkup, Update
 from telegram.ext import Application, CommandHandler, CallbackQueryHandler, ContextTypes
 from telegram.constants import ParseMode
@@ -20,6 +23,9 @@ BOT_TOKEN = "7534238170:AAG1nlQTip_pAPMrvDl8T3z7vHT0IaMY7TM"
 user_settings = {}
 # Password history storage (in production, use a database)
 user_password_history = {}
+
+# Database file path
+DATABASE_PATH = "password_history.db"
 
 class PasswordGenerator:
     """Password generator class with customizable options"""
@@ -63,6 +69,107 @@ def escape_markdown_v2(text):
         text = text.replace(char, f'\\{char}')
     return text
 
+async def init_database():
+    """Initialize the database and create tables"""
+    async with aiosqlite.connect(DATABASE_PATH) as db:
+        await db.execute("""
+            CREATE TABLE IF NOT EXISTS password_history (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                user_id INTEGER NOT NULL,
+                username TEXT,
+                first_name TEXT,
+                last_name TEXT,
+                password TEXT NOT NULL,
+                generation_type TEXT NOT NULL,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            )
+        """)
+        await db.commit()
+        logger.info("Database initialized successfully")
+
+async def save_password_to_db(user_id, username, first_name, last_name, password, generation_type):
+    """Save password to database"""
+    try:
+        async with aiosqlite.connect(DATABASE_PATH) as db:
+            await db.execute("""
+                INSERT INTO password_history (user_id, username, first_name, last_name, password, generation_type)
+                VALUES (?, ?, ?, ?, ?, ?)
+            """, (user_id, username, first_name, last_name, password, generation_type))
+            await db.commit()
+            logger.info(f"Password saved to database for user {user_id} ({username})")
+    except Exception as e:
+        logger.error(f"Error saving password to database: {e}")
+
+async def get_user_passwords_from_db(user_id, limit=20, offset=0):
+    """Get user's passwords from database with pagination"""
+    try:
+        async with aiosqlite.connect(DATABASE_PATH) as db:
+            cursor = await db.execute("""
+                SELECT password, generation_type, created_at 
+                FROM password_history 
+                WHERE user_id = ? 
+                ORDER BY created_at DESC 
+                LIMIT ? OFFSET ?
+            """, (user_id, limit, offset))
+            rows = await cursor.fetchall()
+            return rows
+    except Exception as e:
+        logger.error(f"Error getting passwords from database: {e}")
+        return []
+
+async def get_user_password_count(user_id):
+    """Get total count of user's passwords"""
+    try:
+        async with aiosqlite.connect(DATABASE_PATH) as db:
+            cursor = await db.execute("""
+                SELECT COUNT(*) FROM password_history WHERE user_id = ?
+            """, (user_id,))
+            count = await cursor.fetchone()
+            return count[0] if count else 0
+    except Exception as e:
+        logger.error(f"Error getting password count: {e}")
+        return 0
+
+async def clear_user_passwords_from_db(user_id):
+    """Clear all user's passwords from database"""
+    try:
+        async with aiosqlite.connect(DATABASE_PATH) as db:
+            await db.execute("DELETE FROM password_history WHERE user_id = ?", (user_id,))
+            await db.commit()
+            logger.info(f"Cleared all passwords for user {user_id}")
+    except Exception as e:
+        logger.error(f"Error clearing passwords: {e}")
+
+async def get_all_passwords_stats():
+    """Get statistics about all passwords in database"""
+    try:
+        async with aiosqlite.connect(DATABASE_PATH) as db:
+            cursor = await db.execute("""
+                SELECT 
+                    COUNT(*) as total_passwords,
+                    COUNT(DISTINCT user_id) as unique_users,
+                    generation_type,
+                    COUNT(*) as count_by_type
+                FROM password_history 
+                GROUP BY generation_type
+            """)
+            stats = await cursor.fetchall()
+            
+            cursor = await db.execute("SELECT COUNT(*) FROM password_history")
+            total = await cursor.fetchone()
+            
+            cursor = await db.execute("SELECT COUNT(DISTINCT user_id) FROM password_history")
+            users = await cursor.fetchone()
+            
+            return {
+                'total_passwords': total[0] if total else 0,
+                'unique_users': users[0] if users else 0,
+                'by_type': stats
+            }
+    except Exception as e:
+        logger.error(f"Error getting stats: {e}")
+        return {'total_passwords': 0, 'unique_users': 0, 'by_type': []}
+
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """Send start message with inline keyboard"""
     keyboard = [
@@ -104,8 +211,19 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
             # Generate fast password
             password = password_gen.generate_fast()
             
-            # Save to history
+            # Save to history (memory)
             save_password_to_history(user_id, password, "Fast")
+            
+            # Save to database
+            user = query.from_user
+            await save_password_to_db(
+                user_id=user_id,
+                username=user.username,
+                first_name=user.first_name,
+                last_name=user.last_name,
+                password=password,
+                generation_type="Fast"
+            )
             
             # Format password in monospace for easy copying
             password_text = f"`{password}`"
@@ -154,11 +272,20 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
         elif query.data == "history":
             # Show password history
             logger.info(f"History button pressed by user {user_id}")
-            await show_password_history(query, user_id)
+            await show_password_history_page(query, user_id, 1)
             
         elif query.data == "clear_history":
             # Clear password history
             await clear_password_history(query, user_id)
+            
+        elif query.data.startswith("history_page_"):
+            # Handle history pagination
+            page = int(query.data.replace("history_page_", ""))
+            await show_password_history_page(query, user_id, page)
+            
+        elif query.data == "noop":
+            # Do nothing - just for page indicator button
+            pass
             
     except Exception as e:
         logger.error(f"Error in button_handler: {e}")
@@ -311,8 +438,19 @@ async def generate_custom_password(query, user_id):
         use_symbols=settings['symbols']
     )
     
-    # Save to history
+    # Save to history (memory)
     save_password_to_history(user_id, password, "Custom")
+    
+    # Save to database
+    user = query.from_user
+    await save_password_to_db(
+        user_id=user_id,
+        username=user.username,
+        first_name=user.first_name,
+        last_name=user.last_name,
+        password=password,
+        generation_type="Custom"
+    )
     
     # Format password in monospace for easy copying
     password_text = f"`{password}`"
@@ -454,11 +592,14 @@ def save_password_to_history(user_id, password, password_type):
     
     logger.info(f"Saved password to history for user {user_id}. Total passwords: {len(user_password_history[user_id])}")
 
-async def show_password_history(query, user_id):
-    """Show user's password history"""
-    logger.info(f"Showing history for user {user_id}. History: {user_password_history.get(user_id, [])}")
+async def show_password_history_page(query, user_id, page=1):
+    """Show user's password history with pagination from database"""
+    logger.info(f"Showing history page {page} for user {user_id}")
     
-    if user_id not in user_password_history or not user_password_history[user_id]:
+    # Get total count from database
+    total_passwords = await get_user_password_count(user_id)
+    
+    if total_passwords == 0:
         # No history
         logger.info(f"No history found for user {user_id}")
         keyboard = [
@@ -474,25 +615,58 @@ async def show_password_history(query, user_id):
         )
         return
     
+    # Pagination settings
+    passwords_per_page = 10
+    total_pages = (total_passwords + passwords_per_page - 1) // passwords_per_page
+    
+    # Ensure page is within bounds
+    page = max(1, min(page, total_pages))
+    
+    # Calculate offset for database query
+    offset = (page - 1) * passwords_per_page
+    
+    # Get passwords from database
+    passwords = await get_user_passwords_from_db(user_id, passwords_per_page, offset)
+    
     # Build history text
     try:
-        history_text = "📖 *Password History*\n\n"
+        history_text = f"📖 *Password History* \\(Page {page}/{total_pages}\\)\n\n"
         
-        for i, entry in enumerate(user_password_history[user_id][:10], 1):  # Show last 10
-            # Use simple formatting to avoid escaping issues
-            history_text += f"{i}\\. `{entry['password']}`\n"
-            history_text += f"   📅 {entry['timestamp']} \\| 🔧 {entry['type']}\n\n"
-        
-        if len(user_password_history[user_id]) > 10:
-            history_text += f"_\\.\\.\\. and {len(user_password_history[user_id]) - 10} more passwords_\n\n"
+        for i, (password, generation_type, created_at) in enumerate(passwords, offset + 1):
+            # Format the datetime
+            try:
+                # Parse SQLite datetime format
+                dt = datetime.fromisoformat(created_at.replace('Z', '+00:00'))
+                formatted_date = dt.strftime("%d.%m.%Y %H:%M")
+            except:
+                formatted_date = created_at
+            
+            # Use monospace for passwords to make them copyable
+            history_text += f"{i}\\. `{password}`\n"
+            history_text += f"   📅 {formatted_date} \\| 🔧 {generation_type}\n\n"
         
         history_text += "_Tap any password to copy_"
         
-        # Create keyboard
-        keyboard = [
-            [InlineKeyboardButton("🗑 Clear History", callback_data="clear_history")],
-            [InlineKeyboardButton("🔙 Main Menu", callback_data="back_to_main")]
-        ]
+        # Create pagination keyboard
+        keyboard = []
+        
+        # Pagination buttons
+        if total_pages > 1:
+            nav_buttons = []
+            if page > 1:
+                nav_buttons.append(InlineKeyboardButton("⬅️ Prev", callback_data=f"history_page_{page-1}"))
+            if page < total_pages:
+                nav_buttons.append(InlineKeyboardButton("Next ➡️", callback_data=f"history_page_{page+1}"))
+            
+            if nav_buttons:
+                keyboard.append(nav_buttons)
+            
+            # Page indicator
+            keyboard.append([InlineKeyboardButton(f"📄 {page}/{total_pages}", callback_data="noop")])
+        
+        # Action buttons
+        keyboard.append([InlineKeyboardButton("🗑 Clear History", callback_data="clear_history")])
+        keyboard.append([InlineKeyboardButton("🔙 Main Menu", callback_data="back_to_main")])
         
         reply_markup = InlineKeyboardMarkup(keyboard)
         
@@ -503,29 +677,86 @@ async def show_password_history(query, user_id):
         )
         
     except Exception as e:
-        logger.error(f"Error showing history: {e}")
-        # Fallback to simple text without markdown
-        simple_history = "📖 Password History\n\n"
-        for i, entry in enumerate(user_password_history[user_id][:10], 1):
-            simple_history += f"{i}. {entry['password']}\n"
-            simple_history += f"   📅 {entry['timestamp']} | 🔧 {entry['type']}\n\n"
-        
-        keyboard = [
-            [InlineKeyboardButton("🗑 Clear History", callback_data="clear_history")],
-            [InlineKeyboardButton("🔙 Main Menu", callback_data="back_to_main")]
-        ]
-        
-        reply_markup = InlineKeyboardMarkup(keyboard)
-        
-        await query.edit_message_text(
-            text=simple_history,
-            reply_markup=reply_markup
-        )
+        logger.error(f"Error showing history page {page}: {e}")
+        # Fallback - try with simpler formatting
+        try:
+            simple_history = f"📖 Password History (Page {page}/{total_pages})\n\n"
+            for i, (password, generation_type, created_at) in enumerate(passwords, offset + 1):
+                try:
+                    dt = datetime.fromisoformat(created_at.replace('Z', '+00:00'))
+                    formatted_date = dt.strftime("%d.%m.%Y %H:%M")
+                except:
+                    formatted_date = created_at
+                    
+                simple_history += f"{i}. `{password}`\n"
+                simple_history += f"   📅 {formatted_date} | 🔧 {generation_type}\n\n"
+            
+            simple_history += "Tap any password to copy"
+            
+            # Simple keyboard
+            keyboard = []
+            if total_pages > 1:
+                nav_buttons = []
+                if page > 1:
+                    nav_buttons.append(InlineKeyboardButton("⬅️ Prev", callback_data=f"history_page_{page-1}"))
+                if page < total_pages:
+                    nav_buttons.append(InlineKeyboardButton("Next ➡️", callback_data=f"history_page_{page+1}"))
+                if nav_buttons:
+                    keyboard.append(nav_buttons)
+            
+            keyboard.append([InlineKeyboardButton("🗑 Clear History", callback_data="clear_history")])
+            keyboard.append([InlineKeyboardButton("🔙 Main Menu", callback_data="back_to_main")])
+            
+            reply_markup = InlineKeyboardMarkup(keyboard)
+            
+            await query.edit_message_text(
+                text=simple_history,
+                reply_markup=reply_markup,
+                parse_mode=ParseMode.MARKDOWN_V2
+            )
+            
+        except Exception as e2:
+            logger.error(f"Error in history fallback: {e2}")
+            # Final fallback without markdown
+            plain_history = f"📖 Password History (Page {page}/{total_pages})\n\n"
+            for i, (password, generation_type, created_at) in enumerate(passwords, offset + 1):
+                try:
+                    dt = datetime.fromisoformat(created_at.replace('Z', '+00:00'))
+                    formatted_date = dt.strftime("%d.%m.%Y %H:%M")
+                except:
+                    formatted_date = created_at
+                    
+                plain_history += f"{i}. {password}\n"
+                plain_history += f"   📅 {formatted_date} | 🔧 {generation_type}\n\n"
+            
+            keyboard = []
+            if total_pages > 1:
+                nav_buttons = []
+                if page > 1:
+                    nav_buttons.append(InlineKeyboardButton("⬅️ Prev", callback_data=f"history_page_{page-1}"))
+                if page < total_pages:
+                    nav_buttons.append(InlineKeyboardButton("Next ➡️", callback_data=f"history_page_{page+1}"))
+                if nav_buttons:
+                    keyboard.append(nav_buttons)
+            
+            keyboard.append([InlineKeyboardButton("🗑 Clear History", callback_data="clear_history")])
+            keyboard.append([InlineKeyboardButton("🔙 Main Menu", callback_data="back_to_main")])
+            
+            reply_markup = InlineKeyboardMarkup(keyboard)
+            
+            await query.edit_message_text(
+                text=plain_history,
+                reply_markup=reply_markup
+            )
 
 async def clear_password_history(query, user_id):
-    """Clear user's password history"""
+    """Clear user's password history from both memory and database"""
+    # Clear from memory
     if user_id in user_password_history:
         user_password_history[user_id] = []
+    
+    # Clear from database
+    await clear_user_passwords_from_db(user_id)
     
     keyboard = [
         [InlineKeyboardButton("🔙 Main Menu", callback_data="back_to_main")]
@@ -546,11 +777,14 @@ async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
 *Commands:*
 • /start \\- Start the bot
 • /help \\- Show this help message
+• /debug \\- Show debug information
+• /stats \\- Show global statistics
 
 *Features:*
 • ⚡️ *Fast Generation* \\- Instantly generate a secure password
 • 👁 *Detailed Generation* \\- Customize your password settings
 • 📖 *History* \\- View all previously generated passwords
+• 💾 *Database Storage* \\- All passwords saved permanently
 
 *How to use:*
 1\\. Use /start to begin
@@ -559,12 +793,14 @@ async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
 4\\. Use History to see all your previous passwords
 
 *History Features:*
-• Stores last 20 passwords with timestamps
+• Stores ALL passwords permanently in database
 • Shows password type \\(Fast/Custom\\)
+• Pagination \\- 10 passwords per page
 • Clear history option available
+• Includes username and timestamp
 
 *Security:*
-Passwords are generated locally\\. History is stored temporarily during bot session\\."""
+Passwords are generated locally\\. All data stored in secure database\\."""
     
     await update.message.reply_text(
         help_text,
@@ -574,15 +810,57 @@ Passwords are generated locally\\. History is stored temporarily during bot sess
 async def debug_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """Debug command to check history and settings"""
     user_id = update.effective_user.id
-    history_count = len(user_password_history.get(user_id, []))
+    user = update.effective_user
+    
+    # Get data from memory
+    history_count_memory = len(user_password_history.get(user_id, []))
     settings = user_settings.get(user_id, "No settings")
     
-    debug_text = f"🔍 Debug Info:\n\nUser ID: {user_id}\nPasswords in history: {history_count}\nUser settings: {settings}\n\nHistory data:\n{user_password_history.get(user_id, [])}"
+    # Get data from database
+    history_count_db = await get_user_password_count(user_id)
+    recent_passwords = await get_user_passwords_from_db(user_id, limit=5)
+    
+    debug_text = f"""🔍 Debug Info:
+
+👤 User Info:
+• ID: {user_id}
+• Username: @{user.username or 'None'}
+• Name: {user.first_name or ''} {user.last_name or ''}
+
+📊 Password Stats:
+• In memory: {history_count_memory}
+• In database: {history_count_db}
+
+⚙️ Settings: {settings}
+
+🔐 Recent passwords (DB):"""
+    
+    for i, (password, gen_type, created_at) in enumerate(recent_passwords[:3], 1):
+        debug_text += f"\n{i}. {password} ({gen_type}) - {created_at}"
     
     await update.message.reply_text(debug_text)
 
-def main() -> None:
+async def stats_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Show global statistics"""
+    stats = await get_all_passwords_stats()
+    
+    stats_text = f"""📊 *Global Statistics*
+
+🔐 Total passwords generated: {stats['total_passwords']}
+👥 Unique users: {stats['unique_users']}
+
+📈 By generation type:"""
+    
+    for _, _, gen_type, count in stats['by_type']:
+        stats_text += f"\n• {gen_type}: {count}"
+    
+    await update.message.reply_text(stats_text, parse_mode=ParseMode.MARKDOWN_V2)
+
+async def main() -> None:
     """Start the bot"""
+    # Initialize database first
+    await init_database()
+    
     # Create the Application
     application = Application.builder().token(BOT_TOKEN).build()
     
@@ -590,11 +868,12 @@ def main() -> None:
     application.add_handler(CommandHandler("start", start))
     application.add_handler(CommandHandler("help", help_command))
     application.add_handler(CommandHandler("debug", debug_command))
+    application.add_handler(CommandHandler("stats", stats_command))
     application.add_handler(CallbackQueryHandler(button_handler))
     
     # Run the bot using polling (works better for Railway)
     logger.info("Starting bot with polling...")
-    application.run_polling(
+    await application.run_polling(
         poll_interval=1.0,
         timeout=10,
         bootstrap_retries=5,
@@ -605,4 +884,4 @@ def main() -> None:
     )
 
 if __name__ == "__main__":
-    main()
+    asyncio.run(main())
