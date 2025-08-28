@@ -92,8 +92,19 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
         # Format password in monospace for easy copying
         password_text = f"`{password}`"
         
+        # Create keyboard with main menu buttons
+        keyboard = [
+            [
+                InlineKeyboardButton("⚡️ Fast", callback_data="fast"),
+                InlineKeyboardButton("👁 Detailed", callback_data="detailed")
+            ]
+        ]
+        
+        reply_markup = InlineKeyboardMarkup(keyboard)
+        
         await query.edit_message_text(
             text=f"🔐 *Your fast password:*\n\n{password_text}\n\n_Tap to copy_",
+            reply_markup=reply_markup,
             parse_mode=ParseMode.MARKDOWN_V2
         )
         
