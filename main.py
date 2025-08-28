@@ -18,6 +18,8 @@ BOT_TOKEN = "7534238170:AAG1nlQTip_pAPMrvDl8T3z7vHT0IaMY7TM"
 
 # User settings storage (in production, use a database)
 user_settings = {}
+# Password history storage (in production, use a database)
+user_password_history = {}
 
 class PasswordGenerator:
     """Password generator class with customizable options"""
@@ -60,6 +62,9 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         [
             InlineKeyboardButton("⚡️ Fast", callback_data="fast"),
             InlineKeyboardButton("👁 Detailed", callback_data="detailed")
+        ],
+        [
+            InlineKeyboardButton("📖 History", callback_data="history")
         ]
     ]
     
@@ -69,6 +74,7 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
 
 1\\. Fast password generation
 2\\. Detailed password generation
+3\\. Password history
 
 Choose your option:"""
     
@@ -89,6 +95,9 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
         # Generate fast password
         password = password_gen.generate_fast()
         
+        # Save to history
+        save_password_to_history(user_id, password, "Fast")
+        
         # Format password in monospace for easy copying
         password_text = f"`{password}`"
         
@@ -97,6 +106,9 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
             [
                 InlineKeyboardButton("⚡️ Fast", callback_data="fast"),
                 InlineKeyboardButton("👁 Detailed", callback_data="detailed")
+            ],
+            [
+                InlineKeyboardButton("📖 History", callback_data="history")
             ]
         ]
         
@@ -127,6 +139,14 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
     elif query.data == "back_to_main":
         # Go back to main menu
         await start_from_callback(query)
+        
+    elif query.data == "history":
+        # Show password history
+        await show_password_history(query, user_id)
+        
+    elif query.data == "clear_history":
+        # Clear password history
+        await clear_password_history(query, user_id)
 
 async def show_detailed_options(query, user_id):
     """Show detailed password generation options"""
@@ -253,6 +273,9 @@ async def generate_custom_password(query, user_id):
         use_symbols=settings['symbols']
     )
     
+    # Save to history
+    save_password_to_history(user_id, password, "Custom")
+    
     # Format password in monospace for easy copying
     password_text = f"`{password}`"
     
@@ -299,6 +322,9 @@ async def start_from_callback(query):
         [
             InlineKeyboardButton("⚡️ Fast", callback_data="fast"),
             InlineKeyboardButton("👁 Detailed", callback_data="detailed")
+        ],
+        [
+            InlineKeyboardButton("📖 History", callback_data="history")
         ]
     ]
     
@@ -308,11 +334,95 @@ async def start_from_callback(query):
 
 1\\. Fast password generation
 2\\. Detailed password generation
+3\\. Password history
 
 Choose your option:"""
     
     await query.edit_message_text(
         text=message_text, 
+        reply_markup=reply_markup,
+        parse_mode=ParseMode.MARKDOWN_V2
+    )
+
+def save_password_to_history(user_id, password, password_type):
+    """Save password to user's history"""
+    import datetime
+    
+    if user_id not in user_password_history:
+        user_password_history[user_id] = []
+    
+    # Add timestamp and password info
+    history_entry = {
+        'password': password,
+        'type': password_type,
+        'timestamp': datetime.datetime.now().strftime("%d.%m.%Y %H:%M")
+    }
+    
+    # Add to beginning of list (newest first)
+    user_password_history[user_id].insert(0, history_entry)
+    
+    # Keep only last 20 passwords
+    if len(user_password_history[user_id]) > 20:
+        user_password_history[user_id] = user_password_history[user_id][:20]
+
+async def show_password_history(query, user_id):
+    """Show user's password history"""
+    if user_id not in user_password_history or not user_password_history[user_id]:
+        # No history
+        keyboard = [
+            [InlineKeyboardButton("🔙 Main Menu", callback_data="back_to_main")]
+        ]
+        
+        reply_markup = InlineKeyboardMarkup(keyboard)
+        
+        await query.edit_message_text(
+            text="📖 *Password History*\n\n❌ No passwords generated yet\\.\n\nStart generating passwords to see them here\\!",
+            reply_markup=reply_markup,
+            parse_mode=ParseMode.MARKDOWN_V2
+        )
+        return
+    
+    # Build history text
+    history_text = "📖 *Password History*\n\n"
+    
+    for i, entry in enumerate(user_password_history[user_id][:10], 1):  # Show last 10
+        password_escaped = entry['password'].replace('_', '\\_').replace('*', '\\*').replace('[', '\\[').replace(']', '\\]').replace('(', '\\(').replace(')', '\\)').replace('~', '\\~').replace('`', '\\`').replace('>', '\\>').replace('#', '\\#').replace('+', '\\+').replace('-', '\\-').replace('=', '\\=').replace('|', '\\|').replace('{', '\\{').replace('}', '\\}').replace('.', '\\.').replace('!', '\\!')
+        
+        history_text += f"{i}\\. `{entry['password']}`\n"
+        history_text += f"   📅 {entry['timestamp']} \\| 🔧 {entry['type']}\n\n"
+    
+    if len(user_password_history[user_id]) > 10:
+        history_text += f"_\\.\\.\\. and {len(user_password_history[user_id]) - 10} more passwords_\n\n"
+    
+    history_text += "_Tap any password to copy_"
+    
+    # Create keyboard
+    keyboard = [
+        [InlineKeyboardButton("🗑 Clear History", callback_data="clear_history")],
+        [InlineKeyboardButton("🔙 Main Menu", callback_data="back_to_main")]
+    ]
+    
+    reply_markup = InlineKeyboardMarkup(keyboard)
+    
+    await query.edit_message_text(
+        text=history_text,
+        reply_markup=reply_markup,
+        parse_mode=ParseMode.MARKDOWN_V2
+    )
+
+async def clear_password_history(query, user_id):
+    """Clear user's password history"""
+    if user_id in user_password_history:
+        user_password_history[user_id] = []
+    
+    keyboard = [
+        [InlineKeyboardButton("🔙 Main Menu", callback_data="back_to_main")]
+    ]
+    
+    reply_markup = InlineKeyboardMarkup(keyboard)
+    
+    await query.edit_message_text(
+        text="📖 *Password History*\n\n✅ History cleared successfully\\!\n\nAll your saved passwords have been removed\\.",
         reply_markup=reply_markup,
         parse_mode=ParseMode.MARKDOWN_V2
     )
@@ -328,14 +438,21 @@ async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
 *Features:*
 • ⚡️ *Fast Generation* \\- Instantly generate a secure password
 • 👁 *Detailed Generation* \\- Customize your password settings
+• 📖 *History* \\- View all previously generated passwords
 
 *How to use:*
 1\\. Use /start to begin
 2\\. Choose Fast for instant password or Detailed for custom options
 3\\. Tap on generated password to copy it
+4\\. Use History to see all your previous passwords
+
+*History Features:*
+• Stores last 20 passwords with timestamps
+• Shows password type \\(Fast/Custom\\)
+• Clear history option available
 
 *Security:*
-All passwords are generated locally and not stored anywhere\\."""
+Passwords are generated locally\\. History is stored temporarily during bot session\\."""
     
     await update.message.reply_text(
         help_text,

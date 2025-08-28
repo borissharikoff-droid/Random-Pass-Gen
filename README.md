@@ -6,14 +6,21 @@
 
 - **⚡️ Fast Generation**: Instantly generate a secure 12-character password
 - **👁 Detailed Generation**: Customize password length and character types
+- **📖 Password History**: View all previously generated passwords with timestamps
 - **📱 User-Friendly**: Interactive inline keyboards for easy navigation
 - **📋 Copy-Ready**: Passwords formatted for easy copying in Telegram
-- **🔒 Secure**: Passwords generated locally, not stored anywhere
+- **🔒 Secure**: Passwords generated locally, history stored temporarily
 
 ## Bot Commands
 
 - `/start` - Start the bot and show main menu
 - `/help` - Show help information and usage instructions
+
+## Main Menu Options
+
+- **⚡️ Fast** - Generate instant secure password
+- **👁 Detailed** - Customize password settings
+- **📖 History** - View password history
 
 ## Password Options
 
@@ -77,8 +84,18 @@ BOT_TOKEN = os.environ.get('BOT_TOKEN', 'your_default_token_here')
 2. Choose between:
    - **⚡️ Fast** - Get an instant secure password
    - **👁 Detailed** - Customize your password settings
+   - **📖 History** - View all your generated passwords
 3. Tap on the generated password to copy it
 4. Use the navigation buttons to generate more passwords or change settings
+
+## Password History Features
+
+- **Storage**: Keeps last 20 generated passwords
+- **Timestamps**: Shows when each password was created
+- **Types**: Displays whether password was Fast or Custom generated
+- **Easy Access**: All passwords formatted for easy copying
+- **Clear Option**: Ability to clear entire history
+- **Session Based**: History is temporary and resets when bot restarts
 
 ## Technical Details
 
