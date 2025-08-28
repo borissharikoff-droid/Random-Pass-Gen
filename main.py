@@ -932,7 +932,7 @@ async def admin_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
 async def show_all_passwords_page(query, admin_user_id, page=1):
     """Show all passwords with pagination (admin only)"""
     # Verify admin access
-    ADMIN_IDS = [123456789]  # Replace with actual admin Telegram IDs
+    ADMIN_IDS = [250800600]  # Replace with actual admin Telegram IDs
     if admin_user_id not in ADMIN_IDS:
         await query.answer("❌ Access denied")
         return
@@ -1060,7 +1060,7 @@ async def show_all_passwords_page(query, admin_user_id, page=1):
 # Add handler for admin menu callback
 async def handle_admin_callbacks(query, user_id):
     """Handle admin-specific callbacks"""
-    ADMIN_IDS = [123456789]  # Replace with actual admin Telegram IDs
+    ADMIN_IDS = [250800600]  # Replace with actual admin Telegram IDs
     if user_id not in ADMIN_IDS:
         await query.answer("❌ Access denied")
         return
@@ -1151,7 +1151,7 @@ async def db_info_command(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
     user_id = update.effective_user.id
     
     # Add your admin user IDs here
-    ADMIN_IDS = [123456789]  # Replace with actual admin Telegram IDs
+    ADMIN_IDS = [250800600]  # Replace with actual admin Telegram IDs
     
     if user_id not in ADMIN_IDS:
         await update.message.reply_text("❌ Access denied. This command is for administrators only.")
