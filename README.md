@@ -15,6 +15,7 @@
 
 - `/start` - Start the bot and show main menu
 - `/help` - Show help information and usage instructions
+- `/debug` - Show debug information (history count, user data)
 
 ## Main Menu Options
 

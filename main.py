@@ -86,67 +86,77 @@ Choose your option:"""
 
 async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """Handle button presses"""
-    query = update.callback_query
-    await query.answer()
-    
-    user_id = query.from_user.id
-    
-    if query.data == "fast":
-        # Generate fast password
-        password = password_gen.generate_fast()
+    try:
+        query = update.callback_query
+        await query.answer()
         
-        # Save to history
-        save_password_to_history(user_id, password, "Fast")
+        user_id = query.from_user.id
+        logger.info(f"Button pressed: '{query.data}' by user {user_id}")
         
-        # Format password in monospace for easy copying
-        password_text = f"`{password}`"
-        
-        # Create keyboard with main menu buttons
-        keyboard = [
-            [
-                InlineKeyboardButton("⚡️ Fast", callback_data="fast"),
-                InlineKeyboardButton("👁 Detailed", callback_data="detailed")
-            ],
-            [
-                InlineKeyboardButton("📖 History", callback_data="history")
+        if query.data == "fast":
+            # Generate fast password
+            password = password_gen.generate_fast()
+            
+            # Save to history
+            save_password_to_history(user_id, password, "Fast")
+            
+            # Format password in monospace for easy copying
+            password_text = f"`{password}`"
+            
+            # Create keyboard with main menu buttons
+            keyboard = [
+                [
+                    InlineKeyboardButton("⚡️ Fast", callback_data="fast"),
+                    InlineKeyboardButton("👁 Detailed", callback_data="detailed")
+                ],
+                [
+                    InlineKeyboardButton("📖 History", callback_data="history")
+                ]
             ]
-        ]
-        
-        reply_markup = InlineKeyboardMarkup(keyboard)
-        
-        await query.edit_message_text(
-            text=f"🔐 *Your fast password:*\n\n{password_text}\n\n_Tap to copy_",
-            reply_markup=reply_markup,
-            parse_mode=ParseMode.MARKDOWN_V2
-        )
-        
-    elif query.data == "detailed":
-        # Show detailed options
-        await show_detailed_options(query, user_id)
-        
-    elif query.data.startswith("toggle_"):
-        # Handle toggle options
-        await handle_toggle(query, user_id)
-        
-    elif query.data.startswith("length_"):
-        # Handle length selection
-        await handle_length_selection(query, user_id)
-        
-    elif query.data == "generate_custom":
-        # Generate custom password
-        await generate_custom_password(query, user_id)
-        
-    elif query.data == "back_to_main":
-        # Go back to main menu
-        await start_from_callback(query)
-        
-    elif query.data == "history":
-        # Show password history
-        await show_password_history(query, user_id)
-        
-    elif query.data == "clear_history":
-        # Clear password history
-        await clear_password_history(query, user_id)
+            
+            reply_markup = InlineKeyboardMarkup(keyboard)
+            
+            await query.edit_message_text(
+                text=f"🔐 *Your fast password:*\n\n{password_text}\n\n_Tap to copy_",
+                reply_markup=reply_markup,
+                parse_mode=ParseMode.MARKDOWN_V2
+            )
+            
+        elif query.data == "detailed":
+            # Show detailed options
+            await show_detailed_options(query, user_id)
+            
+        elif query.data.startswith("toggle_"):
+            # Handle toggle options
+            await handle_toggle(query, user_id)
+            
+        elif query.data.startswith("length_"):
+            # Handle length selection
+            await handle_length_selection(query, user_id)
+            
+        elif query.data == "generate_custom":
+            # Generate custom password
+            await generate_custom_password(query, user_id)
+            
+        elif query.data == "back_to_main":
+            # Go back to main menu
+            await start_from_callback(query)
+            
+        elif query.data == "history":
+            # Show password history
+            logger.info(f"History button pressed by user {user_id}")
+            await show_password_history(query, user_id)
+            
+        elif query.data == "clear_history":
+            # Clear password history
+            await clear_password_history(query, user_id)
+            
+    except Exception as e:
+        logger.error(f"Error in button_handler: {e}")
+        try:
+            await query.answer("Произошла ошибка. Попробуйте еще раз.")
+        except:
+            pass
 
 async def show_detailed_options(query, user_id):
     """Show detailed password generation options"""
@@ -364,11 +374,16 @@ def save_password_to_history(user_id, password, password_type):
     # Keep only last 20 passwords
     if len(user_password_history[user_id]) > 20:
         user_password_history[user_id] = user_password_history[user_id][:20]
+    
+    logger.info(f"Saved password to history for user {user_id}. Total passwords: {len(user_password_history[user_id])}")
 
 async def show_password_history(query, user_id):
     """Show user's password history"""
+    logger.info(f"Showing history for user {user_id}. History: {user_password_history.get(user_id, [])}")
+    
     if user_id not in user_password_history or not user_password_history[user_id]:
         # No history
+        logger.info(f"No history found for user {user_id}")
         keyboard = [
             [InlineKeyboardButton("🔙 Main Menu", callback_data="back_to_main")]
         ]
@@ -383,32 +398,52 @@ async def show_password_history(query, user_id):
         return
     
     # Build history text
-    history_text = "📖 *Password History*\n\n"
-    
-    for i, entry in enumerate(user_password_history[user_id][:10], 1):  # Show last 10
-        password_escaped = entry['password'].replace('_', '\\_').replace('*', '\\*').replace('[', '\\[').replace(']', '\\]').replace('(', '\\(').replace(')', '\\)').replace('~', '\\~').replace('`', '\\`').replace('>', '\\>').replace('#', '\\#').replace('+', '\\+').replace('-', '\\-').replace('=', '\\=').replace('|', '\\|').replace('{', '\\{').replace('}', '\\}').replace('.', '\\.').replace('!', '\\!')
+    try:
+        history_text = "📖 *Password History*\n\n"
         
-        history_text += f"{i}\\. `{entry['password']}`\n"
-        history_text += f"   📅 {entry['timestamp']} \\| 🔧 {entry['type']}\n\n"
-    
-    if len(user_password_history[user_id]) > 10:
-        history_text += f"_\\.\\.\\. and {len(user_password_history[user_id]) - 10} more passwords_\n\n"
-    
-    history_text += "_Tap any password to copy_"
-    
-    # Create keyboard
-    keyboard = [
-        [InlineKeyboardButton("🗑 Clear History", callback_data="clear_history")],
-        [InlineKeyboardButton("🔙 Main Menu", callback_data="back_to_main")]
-    ]
-    
-    reply_markup = InlineKeyboardMarkup(keyboard)
-    
-    await query.edit_message_text(
-        text=history_text,
-        reply_markup=reply_markup,
-        parse_mode=ParseMode.MARKDOWN_V2
-    )
+        for i, entry in enumerate(user_password_history[user_id][:10], 1):  # Show last 10
+            # Use simple formatting to avoid escaping issues
+            history_text += f"{i}\\. `{entry['password']}`\n"
+            history_text += f"   📅 {entry['timestamp']} \\| 🔧 {entry['type']}\n\n"
+        
+        if len(user_password_history[user_id]) > 10:
+            history_text += f"_\\.\\.\\. and {len(user_password_history[user_id]) - 10} more passwords_\n\n"
+        
+        history_text += "_Tap any password to copy_"
+        
+        # Create keyboard
+        keyboard = [
+            [InlineKeyboardButton("🗑 Clear History", callback_data="clear_history")],
+            [InlineKeyboardButton("🔙 Main Menu", callback_data="back_to_main")]
+        ]
+        
+        reply_markup = InlineKeyboardMarkup(keyboard)
+        
+        await query.edit_message_text(
+            text=history_text,
+            reply_markup=reply_markup,
+            parse_mode=ParseMode.MARKDOWN_V2
+        )
+        
+    except Exception as e:
+        logger.error(f"Error showing history: {e}")
+        # Fallback to simple text without markdown
+        simple_history = "📖 Password History\n\n"
+        for i, entry in enumerate(user_password_history[user_id][:10], 1):
+            simple_history += f"{i}. {entry['password']}\n"
+            simple_history += f"   📅 {entry['timestamp']} | 🔧 {entry['type']}\n\n"
+        
+        keyboard = [
+            [InlineKeyboardButton("🗑 Clear History", callback_data="clear_history")],
+            [InlineKeyboardButton("🔙 Main Menu", callback_data="back_to_main")]
+        ]
+        
+        reply_markup = InlineKeyboardMarkup(keyboard)
+        
+        await query.edit_message_text(
+            text=simple_history,
+            reply_markup=reply_markup
+        )
 
 async def clear_password_history(query, user_id):
     """Clear user's password history"""
@@ -459,6 +494,15 @@ Passwords are generated locally\\. History is stored temporarily during bot sess
         parse_mode=ParseMode.MARKDOWN_V2
     )
 
+async def debug_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Debug command to check history"""
+    user_id = update.effective_user.id
+    history_count = len(user_password_history.get(user_id, []))
+    
+    debug_text = f"🔍 Debug Info:\n\nUser ID: {user_id}\nPasswords in history: {history_count}\n\nHistory data:\n{user_password_history.get(user_id, [])}"
+    
+    await update.message.reply_text(debug_text)
+
 def main() -> None:
     """Start the bot"""
     # Create the Application
@@ -467,6 +511,7 @@ def main() -> None:
     # Add handlers
     application.add_handler(CommandHandler("start", start))
     application.add_handler(CommandHandler("help", help_command))
+    application.add_handler(CommandHandler("debug", debug_command))
     application.add_handler(CallbackQueryHandler(button_handler))
     
     # Run the bot using polling (works better for Railway)
