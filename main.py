@@ -56,6 +56,13 @@ class PasswordGenerator:
 
 password_gen = PasswordGenerator()
 
+def escape_markdown_v2(text):
+    """Escape special characters for Markdown V2"""
+    special_chars = ['_', '*', '[', ']', '(', ')', '~', '`', '>', '#', '+', '-', '=', '|', '{', '}', '.', '!']
+    for char in special_chars:
+        text = text.replace(char, f'\\{char}')
+    return text
+
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """Send start message with inline keyboard"""
     keyboard = [
@@ -350,12 +357,51 @@ _Tap the password to copy_"""
         logger.info(f"Successfully generated custom password for user {user_id}")
     except Exception as e:
         logger.error(f"Error generating custom password: {e}")
-        # Fallback without markdown
-        simple_text = f"🔐 Your custom password:\n\n{password}\n\nLength: {settings['length']}\n\nTap the password to copy"
-        await query.edit_message_text(
-            text=simple_text,
-            reply_markup=reply_markup
-        )
+        # Try with escaped characters
+        try:
+            escaped_features = []
+            if settings['lowercase']:
+                escaped_features.append("lowercase")
+            if settings['uppercase']:
+                escaped_features.append("UPPERCASE")
+            if settings['digits']:
+                escaped_features.append("123")
+            if settings['symbols']:
+                escaped_features.append("\\!\\@\\#")
+            
+            escaped_features_text = " \\+ ".join(escaped_features)
+            
+            fallback_text = f"""🔐 *Your custom password:*
+
+`{password}`
+
+📊 *Settings:* {escaped_features_text}
+📏 *Length:* {settings['length']}
+
+_Tap the password to copy_"""
+            
+            await query.edit_message_text(
+                text=fallback_text,
+                reply_markup=reply_markup,
+                parse_mode=ParseMode.MARKDOWN_V2
+            )
+        except Exception as e2:
+            logger.error(f"Error in fallback: {e2}")
+            # Final fallback - try with just monospace password
+            try:
+                simple_text = f"🔐 Your custom password:\n\n`{password}`\n\nLength: {settings['length']}\n\nTap the password to copy"
+                await query.edit_message_text(
+                    text=simple_text,
+                    reply_markup=reply_markup,
+                    parse_mode=ParseMode.MARKDOWN_V2
+                )
+            except:
+                # Last resort - plain text
+                plain_text = f"🔐 Your custom password:\n\n{password}\n\nLength: {settings['length']}\n\nTap the password to copy"
+                await query.edit_message_text(
+                    text=plain_text,
+                    reply_markup=reply_markup
+                )
 
 async def start_from_callback(query):
     """Start command from callback query"""
