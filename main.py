@@ -341,20 +341,17 @@ def main() -> None:
     application.add_handler(CommandHandler("help", help_command))
     application.add_handler(CallbackQueryHandler(button_handler))
     
-    # Get port from environment variable (Railway sets this)
-    port = int(os.environ.get('PORT', 8000))
-    
-    # Run the bot
-    if os.environ.get('RAILWAY_ENVIRONMENT'):
-        # Running on Railway
-        application.run_webhook(
-            listen="0.0.0.0",
-            port=port,
-            webhook_url=f"https://{os.environ.get('RAILWAY_STATIC_URL')}"
-        )
-    else:
-        # Running locally
-        application.run_polling()
+    # Run the bot using polling (works better for Railway)
+    logger.info("Starting bot with polling...")
+    application.run_polling(
+        poll_interval=1.0,
+        timeout=10,
+        bootstrap_retries=5,
+        read_timeout=10,
+        write_timeout=10,
+        connect_timeout=10,
+        pool_timeout=10
+    )
 
 if __name__ == "__main__":
     main()
