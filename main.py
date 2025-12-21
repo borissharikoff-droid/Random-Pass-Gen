@@ -6,7 +6,7 @@ import aiosqlite
 import asyncio
 from datetime import datetime
 from telegram import InlineKeyboardButton, InlineKeyboardMarkup, Update
-from telegram.ext import Application, CommandHandler, CallbackQueryHandler, ContextTypes
+from telegram.ext import Application, CommandHandler, CallbackQueryHandler, ContextTypes, ConversationHandler, MessageHandler, filters
 from telegram.constants import ParseMode
 
 # Enable logging
@@ -62,6 +62,9 @@ class PasswordGenerator:
 
 password_gen = PasswordGenerator()
 
+# Conversation states for adding password manually
+ASK_SERVICE, ASK_USERNAME, ASK_PASSWORD, ASK_NOTES = range(4)
+
 def escape_markdown_v2(text):
     """Escape special characters for Markdown V2"""
     special_chars = ['_', '*', '[', ']', '(', ')', '~', '`', '>', '#', '+', '-', '=', '|', '{', '}', '.', '!']
@@ -91,6 +94,20 @@ async def init_database():
                 password TEXT NOT NULL,
                 generation_type TEXT NOT NULL,
                 created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            )
+        """)
+        
+        # Password Manager table
+        await db.execute("""
+            CREATE TABLE IF NOT EXISTS password_manager (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                user_id INTEGER NOT NULL,
+                service_name TEXT NOT NULL,
+                username TEXT,
+                password TEXT NOT NULL,
+                notes TEXT,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
             )
         """)
         await db.commit()
@@ -206,6 +223,359 @@ async def get_total_passwords_count():
         logger.error(f"Error getting total count: {e}")
         return 0
 
+# Password Manager Database Functions
+async def save_password_to_manager(user_id, service_name, username, password, notes=""):
+    """Save password to Password Manager"""
+    try:
+        async with aiosqlite.connect(DATABASE_PATH) as db:
+            await db.execute("""
+                INSERT INTO password_manager (user_id, service_name, username, password, notes)
+                VALUES (?, ?, ?, ?, ?)
+            """, (user_id, service_name, username, password, notes))
+            await db.commit()
+            logger.info(f"Password saved to manager for user {user_id}, service {service_name}")
+            return True
+    except Exception as e:
+        logger.error(f"Error saving password to manager: {e}")
+        return False
+
+async def get_manager_passwords(user_id, limit=20, offset=0):
+    """Get user's passwords from Password Manager with pagination"""
+    try:
+        async with aiosqlite.connect(DATABASE_PATH) as db:
+            cursor = await db.execute("""
+                SELECT id, service_name, username, password, notes, created_at 
+                FROM password_manager 
+                WHERE user_id = ? 
+                ORDER BY created_at DESC 
+                LIMIT ? OFFSET ?
+            """, (user_id, limit, offset))
+            rows = await cursor.fetchall()
+            return rows
+    except Exception as e:
+        logger.error(f"Error getting manager passwords: {e}")
+        return []
+
+async def get_manager_password_count(user_id):
+    """Get total count of user's passwords in Password Manager"""
+    try:
+        async with aiosqlite.connect(DATABASE_PATH) as db:
+            cursor = await db.execute("""
+                SELECT COUNT(*) FROM password_manager WHERE user_id = ?
+            """, (user_id,))
+            count = await cursor.fetchone()
+            return count[0] if count else 0
+    except Exception as e:
+        logger.error(f"Error getting manager password count: {e}")
+        return 0
+
+async def delete_manager_password(user_id, password_id):
+    """Delete a password from Password Manager"""
+    try:
+        async with aiosqlite.connect(DATABASE_PATH) as db:
+            await db.execute("""
+                DELETE FROM password_manager WHERE id = ? AND user_id = ?
+            """, (password_id, user_id))
+            await db.commit()
+            logger.info(f"Deleted password {password_id} for user {user_id}")
+            return True
+    except Exception as e:
+        logger.error(f"Error deleting password: {e}")
+        return False
+
+async def get_manager_password_by_id(user_id, password_id):
+    """Get a specific password from Password Manager"""
+    try:
+        async with aiosqlite.connect(DATABASE_PATH) as db:
+            cursor = await db.execute("""
+                SELECT id, service_name, username, password, notes, created_at
+                FROM password_manager 
+                WHERE id = ? AND user_id = ?
+            """, (password_id, user_id))
+            row = await cursor.fetchone()
+            return row
+    except Exception as e:
+        logger.error(f"Error getting password by id: {e}")
+        return None
+
+# Password Manager Functions
+async def save_generated_password_to_manager(query, user_id, context):
+    """Start the process of saving generated password to manager"""
+    password = context.user_data.get('last_generated_password')
+    
+    if not password:
+        await query.edit_message_text(
+            "❌ No password found to save\\. Please generate a password first\\.",
+            parse_mode=ParseMode.MARKDOWN_V2
+        )
+        return
+    
+    # Store password for the conversation
+    context.user_data['password_to_save'] = password
+    context.user_data['is_saving_generated'] = True
+    
+    keyboard = [[InlineKeyboardButton("❌ Cancel", callback_data="back_to_main")]]
+    reply_markup = InlineKeyboardMarkup(keyboard)
+    
+    await query.edit_message_text(
+        text=f"💾 *Save Password to Manager*\n\nPassword: `{password}`\n\n📝 Please send the *service name* \\(e\\.g\\., Gmail, Facebook, etc\\.\\)",
+        reply_markup=reply_markup,
+        parse_mode=ParseMode.MARKDOWN_V2
+    )
+    
+    return ASK_SERVICE
+
+async def ask_service_name(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    """Ask for service name when adding password manually"""
+    keyboard = [[InlineKeyboardButton("❌ Cancel", callback_data="cancel_add_password")]]
+    reply_markup = InlineKeyboardMarkup(keyboard)
+    
+    await update.message.reply_text(
+        "💾 *Add Password to Manager*\n\n📝 Please send the *service name* \\(e\\.g\\., Gmail, Facebook, Instagram\\)",
+        reply_markup=reply_markup,
+        parse_mode=ParseMode.MARKDOWN_V2
+    )
+    return ASK_USERNAME
+
+async def receive_service_name(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    """Receive service name and ask for username"""
+    service_name = update.message.text
+    context.user_data['service_name'] = service_name
+    
+    keyboard = [[InlineKeyboardButton("⏭ Skip", callback_data="skip_username")]]
+    reply_markup = InlineKeyboardMarkup(keyboard)
+    
+    await update.message.reply_text(
+        f"✅ Service: *{service_name}*\n\n👤 Now send your *username or email* for this service\n\n_Or click Skip if not needed_",
+        reply_markup=reply_markup,
+        parse_mode=ParseMode.MARKDOWN_V2
+    )
+    return ASK_PASSWORD
+
+async def receive_username(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    """Receive username and ask for password"""
+    username = update.message.text
+    context.user_data['username'] = username
+    
+    # Check if we're saving a generated password
+    if context.user_data.get('is_saving_generated'):
+        keyboard = [[InlineKeyboardButton("⏭ Skip Notes", callback_data="skip_notes_generated")]]
+        reply_markup = InlineKeyboardMarkup(keyboard)
+        
+        password = context.user_data.get('password_to_save', '')
+        service = context.user_data.get('service_name', '')
+        
+        await update.message.reply_text(
+            f"✅ Username: *{username}*\n\n📝 Send any *notes* \\(optional\\)\n\n_Or click Skip to save now_",
+            reply_markup=reply_markup,
+            parse_mode=ParseMode.MARKDOWN_V2
+        )
+        return ASK_NOTES
+    else:
+        keyboard = [[InlineKeyboardButton("⏭ Skip", callback_data="skip_password")]]
+        reply_markup = InlineKeyboardMarkup(keyboard)
+        
+        await update.message.reply_text(
+            f"✅ Username: *{username}*\n\n🔐 Now send the *password* for this service",
+            reply_markup=reply_markup,
+            parse_mode=ParseMode.MARKDOWN_V2
+        )
+        return ASK_NOTES
+
+async def receive_password(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    """Receive password and ask for notes"""
+    password = update.message.text
+    context.user_data['password_to_save'] = password
+    
+    keyboard = [[InlineKeyboardButton("⏭ Skip Notes", callback_data="skip_notes")]]
+    reply_markup = InlineKeyboardMarkup(keyboard)
+    
+    await update.message.reply_text(
+        "✅ Password received\n\n📝 Send any *notes* \\(optional\\)\n\n_Or click Skip to save now_",
+        reply_markup=reply_markup,
+        parse_mode=ParseMode.MARKDOWN_V2
+    )
+    return ASK_NOTES
+
+async def receive_notes_and_save(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    """Receive notes and save password to manager"""
+    notes = update.message.text if update.message else ""
+    
+    user_id = update.effective_user.id
+    service_name = context.user_data.get('service_name', '')
+    username = context.user_data.get('username', '')
+    password = context.user_data.get('password_to_save', '')
+    
+    # Save to database
+    success = await save_password_to_manager(user_id, service_name, username, password, notes)
+    
+    if success:
+        keyboard = [
+            [InlineKeyboardButton("🔑 View Manager", callback_data="password_manager")],
+            [InlineKeyboardButton("🔙 Main Menu", callback_data="back_to_main")]
+        ]
+        reply_markup = InlineKeyboardMarkup(keyboard)
+        
+        await update.message.reply_text(
+            f"✅ *Password Saved Successfully\\!*\n\n📦 Service: *{service_name}*\n👤 Username: {username if username else '_not provided_'}\n🔐 Password: `{password}`\n📝 Notes: {notes if notes else '_none_'}",
+            reply_markup=reply_markup,
+            parse_mode=ParseMode.MARKDOWN_V2
+        )
+    else:
+        await update.message.reply_text(
+            "❌ Error saving password\\. Please try again\\.",
+            parse_mode=ParseMode.MARKDOWN_V2
+        )
+    
+    # Clear conversation data
+    context.user_data.clear()
+    return ConversationHandler.END
+
+async def cancel_add_password(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    """Cancel adding password"""
+    context.user_data.clear()
+    
+    keyboard = [
+        [
+            InlineKeyboardButton("⚡️ Fast", callback_data="fast"),
+            InlineKeyboardButton("👁 Detailed", callback_data="detailed")
+        ],
+        [
+            InlineKeyboardButton("📖 History", callback_data="history"),
+            InlineKeyboardButton("🔑 Password Manager", callback_data="password_manager")
+        ],
+        [
+            InlineKeyboardButton("➕ Add Password", callback_data="add_password_start")
+        ]
+    ]
+    
+    reply_markup = InlineKeyboardMarkup(keyboard)
+    
+    message_text = "❌ Cancelled\\.\n\n🔐 *Dox: Pass Gen*\n\nChoose your option:"
+    
+    if update.callback_query:
+        await update.callback_query.edit_message_text(
+            message_text, 
+            reply_markup=reply_markup,
+            parse_mode=ParseMode.MARKDOWN_V2
+        )
+    else:
+        await update.message.reply_text(
+            message_text, 
+            reply_markup=reply_markup,
+            parse_mode=ParseMode.MARKDOWN_V2
+        )
+    
+    return ConversationHandler.END
+
+async def show_password_manager(query, user_id, page=1):
+    """Show Password Manager with pagination"""
+    logger.info(f"Showing password manager page {page} for user {user_id}")
+    
+    total_passwords = await get_manager_password_count(user_id)
+    
+    if total_passwords == 0:
+        keyboard = [
+            [InlineKeyboardButton("➕ Add Password", callback_data="add_password_start")],
+            [InlineKeyboardButton("🔙 Main Menu", callback_data="back_to_main")]
+        ]
+        
+        reply_markup = InlineKeyboardMarkup(keyboard)
+        
+        await query.edit_message_text(
+            text="🔑 *Password Manager*\n\n❌ No passwords saved yet\\.\n\nAdd passwords to keep them safe\\!",
+            reply_markup=reply_markup,
+            parse_mode=ParseMode.MARKDOWN_V2
+        )
+        return
+    
+    # Pagination settings
+    passwords_per_page = 5
+    total_pages = (total_passwords + passwords_per_page - 1) // passwords_per_page
+    page = max(1, min(page, total_pages))
+    offset = (page - 1) * passwords_per_page
+    
+    # Get passwords from database
+    passwords = await get_manager_passwords(user_id, passwords_per_page, offset)
+    
+    # Build text
+    try:
+        manager_text = f"🔑 *Password Manager* \\(Page {page}/{total_pages}\\)\n\n"
+        
+        for pwd_id, service, username, password, notes, created_at in passwords:
+            safe_password = safe_monospace_password(password)
+            manager_text += f"📦 *{service}*\n"
+            if username:
+                manager_text += f"👤 {username}\n"
+            manager_text += f"🔐 {safe_password}\n"
+            if notes:
+                # Escape notes for MarkdownV2
+                escaped_notes = notes.replace('_', '\\_').replace('*', '\\*').replace('[', '\\[').replace(']', '\\]').replace('(', '\\(').replace(')', '\\)').replace('~', '\\~').replace('`', '\\`').replace('>', '\\>').replace('#', '\\#').replace('+', '\\+').replace('-', '\\-').replace('=', '\\=').replace('|', '\\|').replace('{', '\\{').replace('}', '\\}').replace('.', '\\.').replace('!', '\\!')
+                manager_text += f"📝 _{escaped_notes}_\n"
+            manager_text += f"🗑 /delete\\_{pwd_id}\n\n"
+        
+        manager_text += "_Tap password to copy_"
+        
+        # Create keyboard
+        keyboard = []
+        
+        # Pagination
+        if total_pages > 1:
+            nav_buttons = []
+            if page > 1:
+                nav_buttons.append(InlineKeyboardButton("⬅️ Prev", callback_data=f"manager_page_{page-1}"))
+            if page < total_pages:
+                nav_buttons.append(InlineKeyboardButton("Next ➡️", callback_data=f"manager_page_{page+1}"))
+            if nav_buttons:
+                keyboard.append(nav_buttons)
+            keyboard.append([InlineKeyboardButton(f"📄 {page}/{total_pages}", callback_data="noop")])
+        
+        keyboard.append([InlineKeyboardButton("➕ Add Password", callback_data="add_password_start")])
+        keyboard.append([InlineKeyboardButton("🔙 Main Menu", callback_data="back_to_main")])
+        
+        reply_markup = InlineKeyboardMarkup(keyboard)
+        
+        await query.edit_message_text(
+            text=manager_text,
+            reply_markup=reply_markup,
+            parse_mode=ParseMode.MARKDOWN_V2
+        )
+        
+    except Exception as e:
+        logger.error(f"Error showing password manager: {e}")
+        # Fallback without markdown
+        simple_text = f"🔑 Password Manager (Page {page}/{total_pages})\n\n"
+        
+        for pwd_id, service, username, password, notes, created_at in passwords:
+            simple_text += f"📦 {service}\n"
+            if username:
+                simple_text += f"👤 {username}\n"
+            simple_text += f"🔐 `{password}`\n"
+            if notes:
+                simple_text += f"📝 {notes}\n"
+            simple_text += f"🗑 /delete_{pwd_id}\n\n"
+        
+        keyboard = []
+        if total_pages > 1:
+            nav_buttons = []
+            if page > 1:
+                nav_buttons.append(InlineKeyboardButton("⬅️ Prev", callback_data=f"manager_page_{page-1}"))
+            if page < total_pages:
+                nav_buttons.append(InlineKeyboardButton("Next ➡️", callback_data=f"manager_page_{page+1}"))
+            if nav_buttons:
+                keyboard.append(nav_buttons)
+        
+        keyboard.append([InlineKeyboardButton("➕ Add Password", callback_data="add_password_start")])
+        keyboard.append([InlineKeyboardButton("🔙 Main Menu", callback_data="back_to_main")])
+        
+        reply_markup = InlineKeyboardMarkup(keyboard)
+        
+        await query.edit_message_text(
+            text=simple_text,
+            reply_markup=reply_markup,
+            parse_mode=ParseMode.MARKDOWN_V2
+        )
+
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """Send start message with inline keyboard"""
     keyboard = [
@@ -214,7 +584,11 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
             InlineKeyboardButton("👁 Detailed", callback_data="detailed")
         ],
         [
-            InlineKeyboardButton("📖 History", callback_data="history")
+            InlineKeyboardButton("📖 History", callback_data="history"),
+            InlineKeyboardButton("🔑 Password Manager", callback_data="password_manager")
+        ],
+        [
+            InlineKeyboardButton("➕ Add Password", callback_data="add_password_start")
         ]
     ]
     
@@ -225,6 +599,7 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
 1\\. Fast password generation
 2\\. Detailed password generation
 3\\. Password history
+4\\. Password Manager \\- save and manage your passwords
 
 Choose your option:"""
     
@@ -261,24 +636,34 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
                 generation_type="Fast"
             )
             
+            # Store password in context for saving to manager
+            context.user_data['last_generated_password'] = password
+            
             # Format password in monospace for easy copying
             password_text = f"`{password}`"
             
-            # Create keyboard with main menu buttons
+            # Create keyboard with main menu buttons and Save to Manager option
             keyboard = [
+                [
+                    InlineKeyboardButton("💾 Save to Manager", callback_data="save_to_manager")
+                ],
                 [
                     InlineKeyboardButton("⚡️ Fast", callback_data="fast"),
                     InlineKeyboardButton("👁 Detailed", callback_data="detailed")
                 ],
                 [
-                    InlineKeyboardButton("📖 History", callback_data="history")
+                    InlineKeyboardButton("📖 History", callback_data="history"),
+                    InlineKeyboardButton("🔑 Manager", callback_data="password_manager")
+                ],
+                [
+                    InlineKeyboardButton("🔙 Main Menu", callback_data="back_to_main")
                 ]
             ]
             
             reply_markup = InlineKeyboardMarkup(keyboard)
             
             await query.edit_message_text(
-                text=f"🔐 *Your fast password:*\n\n{password_text}\n\n_Tap to copy_",
+                text=f"🔐 *Your fast password:*\n\n{password_text}\n\n_Tap to copy_\n\n💡 _You can save this password to Manager_",
                 reply_markup=reply_markup,
                 parse_mode=ParseMode.MARKDOWN_V2
             )
@@ -331,6 +716,97 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
         elif query.data in ["admin_menu", "admin_stats", "admin_export"]:
             # Handle admin callbacks
             await handle_admin_callbacks(query, user_id)
+        
+        elif query.data == "save_to_manager":
+            # Start saving generated password to manager
+            result = await save_generated_password_to_manager(query, user_id, context)
+            if result == ASK_SERVICE:
+                context.user_data['waiting_for_service'] = True
+        
+        elif query.data == "password_manager":
+            # Show password manager
+            await show_password_manager(query, user_id, 1)
+        
+        elif query.data.startswith("manager_page_"):
+            # Handle password manager pagination
+            page = int(query.data.replace("manager_page_", ""))
+            await show_password_manager(query, user_id, page)
+        
+        elif query.data == "add_password_start":
+            # Start adding password manually
+            keyboard = [[InlineKeyboardButton("❌ Cancel", callback_data="cancel_add_password")]]
+            reply_markup = InlineKeyboardMarkup(keyboard)
+            
+            await query.edit_message_text(
+                "💾 *Add Password to Manager*\n\n📝 Please send the *service name* \\(e\\.g\\., Gmail, Facebook, Instagram\\)",
+                reply_markup=reply_markup,
+                parse_mode=ParseMode.MARKDOWN_V2
+            )
+            context.user_data['adding_password'] = True
+            context.user_data['is_saving_generated'] = False
+            context.user_data['conv_state'] = ASK_SERVICE
+        
+        elif query.data == "cancel_add_password":
+            # Cancel adding password
+            await cancel_add_password(update, context)
+        
+        elif query.data == "skip_username":
+            # Skip username and ask for password
+            context.user_data['username'] = ""
+            
+            if context.user_data.get('is_saving_generated'):
+                keyboard = [[InlineKeyboardButton("⏭ Skip Notes", callback_data="skip_notes_generated")]]
+                reply_markup = InlineKeyboardMarkup(keyboard)
+                
+                await query.edit_message_text(
+                    "📝 Send any *notes* \\(optional\\)\n\n_Or click Skip to save now_",
+                    reply_markup=reply_markup,
+                    parse_mode=ParseMode.MARKDOWN_V2
+                )
+                context.user_data['conv_state'] = ASK_NOTES
+            else:
+                keyboard = [[InlineKeyboardButton("⏭ Skip", callback_data="skip_password")]]
+                reply_markup = InlineKeyboardMarkup(keyboard)
+                
+                await query.edit_message_text(
+                    "🔐 Now send the *password* for this service",
+                    reply_markup=reply_markup,
+                    parse_mode=ParseMode.MARKDOWN_V2
+                )
+                context.user_data['conv_state'] = ASK_PASSWORD
+        
+        elif query.data in ["skip_notes", "skip_notes_generated"]:
+            # Skip notes and save
+            user_id = query.from_user.id
+            service_name = context.user_data.get('service_name', '')
+            username = context.user_data.get('username', '')
+            password = context.user_data.get('password_to_save', '')
+            notes = ""
+            
+            success = await save_password_to_manager(user_id, service_name, username, password, notes)
+            
+            if success:
+                keyboard = [
+                    [InlineKeyboardButton("🔑 View Manager", callback_data="password_manager")],
+                    [InlineKeyboardButton("🔙 Main Menu", callback_data="back_to_main")]
+                ]
+                reply_markup = InlineKeyboardMarkup(keyboard)
+                
+                safe_service = service_name.replace('_', '\\_').replace('*', '\\*').replace('[', '\\[').replace(']', '\\]').replace('(', '\\(').replace(')', '\\)').replace('~', '\\~').replace('`', '\\`').replace('>', '\\>').replace('#', '\\#').replace('+', '\\+').replace('-', '\\-').replace('=', '\\=').replace('|', '\\|').replace('{', '\\{').replace('}', '\\}').replace('.', '\\.').replace('!', '\\!')
+                safe_username = username.replace('_', '\\_').replace('*', '\\*').replace('[', '\\[').replace(']', '\\]').replace('(', '\\(').replace(')', '\\)').replace('~', '\\~').replace('`', '\\`').replace('>', '\\>').replace('#', '\\#').replace('+', '\\+').replace('-', '\\-').replace('=', '\\=').replace('|', '\\|').replace('{', '\\{').replace('}', '\\}').replace('.', '\\.').replace('!', '\\!') if username else '_not provided_'
+                
+                await query.edit_message_text(
+                    f"✅ *Password Saved Successfully\\!*\n\n📦 Service: *{safe_service}*\n👤 Username: {safe_username}\n🔐 Password: `{password}`",
+                    reply_markup=reply_markup,
+                    parse_mode=ParseMode.MARKDOWN_V2
+                )
+            else:
+                await query.edit_message_text(
+                    "❌ Error saving password\\. Please try again\\.",
+                    parse_mode=ParseMode.MARKDOWN_V2
+                )
+            
+            context.user_data.clear()
             
     except Exception as e:
         logger.error(f"Error in button_handler: {e}")
@@ -497,11 +973,16 @@ async def generate_custom_password(query, user_id):
         generation_type="Custom"
     )
     
+    # Store password in context for saving to manager
+    context = query._context
+    context.user_data['last_generated_password'] = password
+    
     # Format password in monospace for easy copying
     password_text = f"`{password}`"
     
     # Create keyboard with options
     keyboard = [
+        [InlineKeyboardButton("💾 Save to Manager", callback_data="save_to_manager")],
         [InlineKeyboardButton("🔄 Generate Another", callback_data="generate_custom")],
         [InlineKeyboardButton("⚙️ Change Settings", callback_data="detailed")],
         [InlineKeyboardButton("🔙 Main Menu", callback_data="back_to_main")]
@@ -594,7 +1075,11 @@ async def start_from_callback(query):
             InlineKeyboardButton("👁 Detailed", callback_data="detailed")
         ],
         [
-            InlineKeyboardButton("📖 History", callback_data="history")
+            InlineKeyboardButton("📖 History", callback_data="history"),
+            InlineKeyboardButton("🔑 Password Manager", callback_data="password_manager")
+        ],
+        [
+            InlineKeyboardButton("➕ Add Password", callback_data="add_password_start")
         ]
     ]
     
@@ -605,6 +1090,7 @@ async def start_from_callback(query):
 1\\. Fast password generation
 2\\. Detailed password generation
 3\\. Password history
+4\\. Password Manager \\- save and manage your passwords
 
 Choose your option:"""
     
@@ -826,21 +1312,35 @@ async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
 • /help \\- Show this help message
 • /debug \\- Show debug information
 • /stats \\- Show global statistics
+• /delete\\_<id> \\- Delete password from Manager
 
 *Features:*
 • ⚡️ *Fast Generation* \\- Instantly generate a secure password
 • 👁 *Detailed Generation* \\- Customize your password settings
 • 📖 *History* \\- View all previously generated passwords
+• 🔑 *Password Manager* \\- Save and manage your passwords
+• ➕ *Add Password* \\- Manually add passwords to Manager
 • 💾 *Database Storage* \\- All passwords saved permanently
 
 *How to use:*
 1\\. Use /start to begin
 2\\. Choose Fast for instant password or Detailed for custom options
 3\\. Tap on generated password to copy it
-4\\. Use History to see all your previous passwords
+4\\. Save generated passwords to Manager with "Save to Manager" button
+5\\. Add your own passwords manually with "Add Password"
+6\\. View all saved passwords in Password Manager
+
+*Password Manager Features:*
+• Save generated passwords with service name
+• Add passwords manually from any source
+• Store username/email for each password
+• Add optional notes for each entry
+• View all passwords with pagination
+• Delete passwords with /delete\\_<id> command
+• All data encrypted and secure
 
 *History Features:*
-• Stores ALL passwords permanently in database
+• Stores ALL generated passwords permanently
 • Shows password type \\(Fast/Custom\\)
 • Pagination \\- 10 passwords per page
 • Clear history option available
@@ -1146,6 +1646,139 @@ async def handle_admin_callbacks(query, user_id):
                 reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🔙 Admin Panel", callback_data="admin_menu")]])
             )
 
+async def handle_text_messages(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Handle text messages during password adding conversation"""
+    user_id = update.effective_user.id
+    text = update.message.text
+    
+    # Check if user is in a conversation
+    if not context.user_data.get('adding_password') and not context.user_data.get('waiting_for_service'):
+        return
+    
+    state = context.user_data.get('conv_state')
+    
+    if state == ASK_SERVICE:
+        # Received service name
+        context.user_data['service_name'] = text
+        keyboard = [[InlineKeyboardButton("⏭ Skip", callback_data="skip_username")]]
+        reply_markup = InlineKeyboardMarkup(keyboard)
+        
+        safe_text = text.replace('_', '\\_').replace('*', '\\*').replace('[', '\\[').replace(']', '\\]').replace('(', '\\(').replace(')', '\\)').replace('~', '\\~').replace('`', '\\`').replace('>', '\\>').replace('#', '\\#').replace('+', '\\+').replace('-', '\\-').replace('=', '\\=').replace('|', '\\|').replace('{', '\\{').replace('}', '\\}').replace('.', '\\.').replace('!', '\\!')
+        
+        await update.message.reply_text(
+            f"✅ Service: *{safe_text}*\n\n👤 Now send your *username or email* for this service\n\n_Or click Skip if not needed_",
+            reply_markup=reply_markup,
+            parse_mode=ParseMode.MARKDOWN_V2
+        )
+        context.user_data['conv_state'] = ASK_USERNAME
+        
+    elif state == ASK_USERNAME:
+        # Received username
+        context.user_data['username'] = text
+        
+        if context.user_data.get('is_saving_generated'):
+            keyboard = [[InlineKeyboardButton("⏭ Skip Notes", callback_data="skip_notes_generated")]]
+            reply_markup = InlineKeyboardMarkup(keyboard)
+            
+            await update.message.reply_text(
+                f"✅ Username: *{text}*\n\n📝 Send any *notes* \\(optional\\)\n\n_Or click Skip to save now_",
+                reply_markup=reply_markup,
+                parse_mode=ParseMode.MARKDOWN_V2
+            )
+            context.user_data['conv_state'] = ASK_NOTES
+        else:
+            await update.message.reply_text(
+                f"✅ Username: *{text}*\n\n🔐 Now send the *password* for this service",
+                parse_mode=ParseMode.MARKDOWN_V2
+            )
+            context.user_data['conv_state'] = ASK_PASSWORD
+            
+    elif state == ASK_PASSWORD:
+        # Received password
+        context.user_data['password_to_save'] = text
+        keyboard = [[InlineKeyboardButton("⏭ Skip Notes", callback_data="skip_notes")]]
+        reply_markup = InlineKeyboardMarkup(keyboard)
+        
+        await update.message.reply_text(
+            "✅ Password received\n\n📝 Send any *notes* \\(optional\\)\n\n_Or click Skip to save now_",
+            reply_markup=reply_markup,
+            parse_mode=ParseMode.MARKDOWN_V2
+        )
+        context.user_data['conv_state'] = ASK_NOTES
+        
+    elif state == ASK_NOTES:
+        # Received notes, save everything
+        notes = text
+        service_name = context.user_data.get('service_name', '')
+        username = context.user_data.get('username', '')
+        password = context.user_data.get('password_to_save', '')
+        
+        success = await save_password_to_manager(user_id, service_name, username, password, notes)
+        
+        if success:
+            keyboard = [
+                [InlineKeyboardButton("🔑 View Manager", callback_data="password_manager")],
+                [InlineKeyboardButton("🔙 Main Menu", callback_data="back_to_main")]
+            ]
+            reply_markup = InlineKeyboardMarkup(keyboard)
+            
+            safe_service = service_name.replace('_', '\\_').replace('*', '\\*').replace('[', '\\[').replace(']', '\\]').replace('(', '\\(').replace(')', '\\)').replace('~', '\\~').replace('`', '\\`').replace('>', '\\>').replace('#', '\\#').replace('+', '\\+').replace('-', '\\-').replace('=', '\\=').replace('|', '\\|').replace('{', '\\{').replace('}', '\\}').replace('.', '\\.').replace('!', '\\!')
+            safe_username = username.replace('_', '\\_').replace('*', '\\*').replace('[', '\\[').replace(']', '\\]').replace('(', '\\(').replace(')', '\\)').replace('~', '\\~').replace('`', '\\`').replace('>', '\\>').replace('#', '\\#').replace('+', '\\+').replace('-', '\\-').replace('=', '\\=').replace('|', '\\|').replace('{', '\\{').replace('}', '\\}').replace('.', '\\.').replace('!', '\\!') if username else '_not provided_'
+            safe_notes = notes.replace('_', '\\_').replace('*', '\\*').replace('[', '\\[').replace(']', '\\]').replace('(', '\\(').replace(')', '\\)').replace('~', '\\~').replace('`', '\\`').replace('>', '\\>').replace('#', '\\#').replace('+', '\\+').replace('-', '\\-').replace('=', '\\=').replace('|', '\\|').replace('{', '\\{').replace('}', '\\}').replace('.', '\\.').replace('!', '\\!')
+            
+            await update.message.reply_text(
+                f"✅ *Password Saved Successfully\\!*\n\n📦 Service: *{safe_service}*\n👤 Username: {safe_username}\n🔐 Password: `{password}`\n📝 Notes: {safe_notes}",
+                reply_markup=reply_markup,
+                parse_mode=ParseMode.MARKDOWN_V2
+            )
+        else:
+            await update.message.reply_text(
+                "❌ Error saving password\\. Please try again\\.",
+                parse_mode=ParseMode.MARKDOWN_V2
+            )
+        
+        context.user_data.clear()
+
+async def delete_password_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Delete a password from Password Manager"""
+    user_id = update.effective_user.id
+    
+    # Extract password ID from command
+    # Command format: /delete_123
+    command_text = update.message.text
+    
+    try:
+        password_id = int(command_text.split('_')[1])
+    except (IndexError, ValueError):
+        await update.message.reply_text("❌ Invalid command format. Use: /delete_<id>")
+        return
+    
+    # Verify password belongs to user
+    password = await get_manager_password_by_id(user_id, password_id)
+    
+    if not password:
+        await update.message.reply_text("❌ Password not found or doesn't belong to you.")
+        return
+    
+    # Delete password
+    success = await delete_manager_password(user_id, password_id)
+    
+    if success:
+        keyboard = [
+            [InlineKeyboardButton("🔑 View Manager", callback_data="password_manager")],
+            [InlineKeyboardButton("🔙 Main Menu", callback_data="back_to_main")]
+        ]
+        reply_markup = InlineKeyboardMarkup(keyboard)
+        
+        service_name = password[1]
+        await update.message.reply_text(
+            f"✅ *Password Deleted*\n\n📦 Service: {service_name} has been removed from your Password Manager\\.",
+            reply_markup=reply_markup,
+            parse_mode=ParseMode.MARKDOWN_V2
+        )
+    else:
+        await update.message.reply_text("❌ Error deleting password. Please try again.")
+
 async def db_info_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """Show database info (admin only)"""
     user_id = update.effective_user.id
@@ -1210,6 +1843,20 @@ def main() -> None:
     application.add_handler(CommandHandler("stats", stats_command))
     application.add_handler(CommandHandler("admin", admin_command))
     application.add_handler(CommandHandler("dbinfo", db_info_command))
+    
+    # Add delete command handler with pattern matching
+    from telegram.ext import filters as Filters
+    application.add_handler(MessageHandler(
+        Filters.Regex(r'^/delete_\d+$'), 
+        delete_password_command
+    ))
+    
+    # Add text message handler for conversation
+    application.add_handler(MessageHandler(
+        Filters.TEXT & ~Filters.COMMAND, 
+        handle_text_messages
+    ))
+    
     application.add_handler(CallbackQueryHandler(button_handler))
     
     # Initialize database
