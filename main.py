@@ -313,8 +313,10 @@ async def save_generated_password_to_manager(query, user_id, context):
     # Store password for the conversation
     context.user_data['password_to_save'] = password
     context.user_data['is_saving_generated'] = True
+    context.user_data['waiting_for_service'] = True
+    context.user_data['conv_state'] = ASK_SERVICE
     
-    keyboard = [[InlineKeyboardButton("❌ Cancel", callback_data="back_to_main")]]
+    keyboard = [[InlineKeyboardButton("❌ Cancel", callback_data="cancel_add_password")]]
     reply_markup = InlineKeyboardMarkup(keyboard)
     
     await query.edit_message_text(
@@ -719,9 +721,7 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
         
         elif query.data == "save_to_manager":
             # Start saving generated password to manager
-            result = await save_generated_password_to_manager(query, user_id, context)
-            if result == ASK_SERVICE:
-                context.user_data['waiting_for_service'] = True
+            await save_generated_password_to_manager(query, user_id, context)
         
         elif query.data == "password_manager":
             # Show password manager
@@ -1655,7 +1655,14 @@ async def handle_text_messages(update: Update, context: ContextTypes.DEFAULT_TYP
     if not context.user_data.get('adding_password') and not context.user_data.get('waiting_for_service'):
         return
     
+    # Set state if not set but we're in a conversation
     state = context.user_data.get('conv_state')
+    if state is None:
+        if context.user_data.get('waiting_for_service') or context.user_data.get('adding_password'):
+            state = ASK_SERVICE
+            context.user_data['conv_state'] = ASK_SERVICE
+        else:
+            return
     
     if state == ASK_SERVICE:
         # Received service name
