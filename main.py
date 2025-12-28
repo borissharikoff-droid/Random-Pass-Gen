@@ -1913,23 +1913,35 @@ async def db_info_command(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
             """)
             recent = await cursor.fetchall()
             
-            info_text = f"""🗄️ **Database Info**
+            # Escape special characters for Markdown V2
+            tables_list = [t[0] for t in tables]
+            tables_str = ', '.join(tables_list)
+            tables_str = escape_markdown_v2(tables_str)
+            
+            info_text = f"""🗄️ *Database Info*
 
-📊 **Statistics:**
+📊 *Statistics:*
 • Total passwords: {total_count[0] if total_count else 0}
 • Unique users: {users_count[0] if users_count else 0}
-• Tables: {', '.join([t[0] for t in tables])}
+• Tables: {tables_str}
 
-📝 **Recent entries:**"""
+📝 *Recent entries:*"""
 
             for i, (uid, username, password, gen_type, created_at) in enumerate(recent, 1):
                 user_info = f"@{username}" if username else f"ID:{uid}"
-                info_text += f"\n{i}. `{password}` ({gen_type}) - {user_info}"
+                safe_password = safe_monospace_password(password)
+                safe_gen_type = escape_markdown_v2(str(gen_type))
+                safe_user_info = escape_markdown_v2(user_info)
+                info_text += f"\n{i}\\. {safe_password} \\({safe_gen_type}\\) \\- {safe_user_info}"
             
             await update.message.reply_text(info_text, parse_mode=ParseMode.MARKDOWN_V2)
             
     except Exception as e:
-        await update.message.reply_text(f"❌ Database error: {str(e)}")
+        error_msg = escape_markdown_v2(str(e))
+        await update.message.reply_text(
+            f"❌ Database error: {error_msg}",
+            parse_mode=ParseMode.MARKDOWN_V2
+        )
 
 def main() -> None:
     """Start the bot"""
