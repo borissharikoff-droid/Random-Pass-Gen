@@ -71,19 +71,36 @@ This bot is configured for easy deployment on Railway:
 - `runtime.txt` - Python version specification
 - `requirements.txt` - Python dependencies
 
-## Bot Token
+## Configuration
 
-The bot token is currently hardcoded in `main.py`. For production deployment, it's recommended to use environment variables:
+### Environment Variables
 
-```python
-BOT_TOKEN = os.environ.get('BOT_TOKEN', 'your_default_token_here')
+The bot uses environment variables for sensitive configuration. Create a `.env` file (or set them in Railway):
+
+**Required:**
+- `BOT_TOKEN` - Your Telegram bot token from @BotFather
+
+**Optional:**
+- `ADMIN_IDS` - Comma-separated list of Telegram user IDs for admin access (e.g., "123456789,987654321")
+- `DATABASE_PATH` - Path to SQLite database file (defaults to "password_history.db")
+
+### Example .env file:
+
+```env
+BOT_TOKEN=your_bot_token_here
+ADMIN_IDS=123456789,987654321
+DATABASE_PATH=password_history.db
 ```
+
+**Important:** Never commit your `.env` file to Git! It's already in `.gitignore`.
 
 ## Security Features
 
-- Passwords are generated using Python's `random` module
-- No password storage - generated on-demand
-- No persistent user data storage
+- Passwords are generated using Python's `secrets` module (cryptographically secure)
+- All sensitive data (tokens, admin IDs) stored in environment variables
+- Database indexes for optimized queries
+- Input validation and sanitization
+- Comprehensive error handling
 - All processing happens locally
 
 ## Usage Example

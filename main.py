@@ -1,13 +1,17 @@
 import logging
-import random
+import secrets
 import string
 import os
 import aiosqlite
 import asyncio
 from datetime import datetime
+from dotenv import load_dotenv
 from telegram import InlineKeyboardButton, InlineKeyboardMarkup, Update
 from telegram.ext import Application, CommandHandler, CallbackQueryHandler, ContextTypes, ConversationHandler, MessageHandler, filters
 from telegram.constants import ParseMode
+
+# Load environment variables from .env file
+load_dotenv()
 
 # Enable logging
 logging.basicConfig(
@@ -16,16 +20,22 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
-# Bot token
-BOT_TOKEN = "7534238170:AAG1nlQTip_pAPMrvDl8T3z7vHT0IaMY7TM"
+# Bot token from environment variable
+BOT_TOKEN = os.environ.get("BOT_TOKEN")
+if not BOT_TOKEN:
+    raise ValueError("BOT_TOKEN environment variable is not set. Please set it in Railway or .env file.")
+
+# Admin IDs from environment variable (comma-separated)
+ADMIN_IDS_STR = os.environ.get("ADMIN_IDS", "")
+ADMIN_IDS = [int(admin_id.strip()) for admin_id in ADMIN_IDS_STR.split(",") if admin_id.strip()]
 
 # User settings storage (in production, use a database)
 user_settings = {}
 # Password history storage (in production, use a database)
 user_password_history = {}
 
-# Database file path
-DATABASE_PATH = "password_history.db"
+# Database file path - use Railway's persistent storage if available
+DATABASE_PATH = os.environ.get("DATABASE_PATH", "password_history.db")
 
 class PasswordGenerator:
     """Password generator class with customizable options"""
@@ -37,13 +47,13 @@ class PasswordGenerator:
         self.symbols = "!@#$%^&*()_+-=[]{}|;:,.<>?"
     
     def generate_fast(self, length=12):
-        """Generate a fast password with default settings"""
+        """Generate a fast password with default settings using cryptographically secure random"""
         chars = self.lowercase + self.uppercase + self.digits + self.symbols
-        return ''.join(random.choice(chars) for _ in range(length))
+        return ''.join(secrets.choice(chars) for _ in range(length))
     
     def generate_custom(self, length=12, use_lowercase=True, use_uppercase=True, 
                        use_digits=True, use_symbols=True):
-        """Generate a custom password based on user preferences"""
+        """Generate a custom password based on user preferences using cryptographically secure random"""
         chars = ""
         
         if use_lowercase:
@@ -58,7 +68,7 @@ class PasswordGenerator:
         if not chars:
             chars = self.lowercase + self.uppercase + self.digits
             
-        return ''.join(random.choice(chars) for _ in range(length))
+        return ''.join(secrets.choice(chars) for _ in range(length))
 
 password_gen = PasswordGenerator()
 
@@ -76,42 +86,75 @@ def safe_monospace_password(password):
     """Safely format password in monospace, handling all special characters"""
     try:
         # Try simple monospace first
-        return f"`{password}`"
-    except:
-        # If that fails, just return the password
+        if password:
+            return f"`{password}`"
         return password
+    except (TypeError, AttributeError) as e:
+        logger.error(f"Error formatting password: {e}")
+        # If that fails, just return the password
+        return str(password) if password else ""
 
 async def init_database():
     """Initialize the database and create tables"""
-    async with aiosqlite.connect(DATABASE_PATH) as db:
-        await db.execute("""
-            CREATE TABLE IF NOT EXISTS password_history (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                user_id INTEGER NOT NULL,
-                username TEXT,
-                first_name TEXT,
-                last_name TEXT,
-                password TEXT NOT NULL,
-                generation_type TEXT NOT NULL,
-                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-            )
-        """)
-        
-        # Password Manager table
-        await db.execute("""
-            CREATE TABLE IF NOT EXISTS password_manager (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                user_id INTEGER NOT NULL,
-                service_name TEXT NOT NULL,
-                username TEXT,
-                password TEXT NOT NULL,
-                notes TEXT,
-                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-                updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-            )
-        """)
-        await db.commit()
-        logger.info("Database initialized successfully")
+    try:
+        async with aiosqlite.connect(DATABASE_PATH) as db:
+            # Enable foreign keys
+            await db.execute("PRAGMA foreign_keys = ON")
+            
+            await db.execute("""
+                CREATE TABLE IF NOT EXISTS password_history (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    user_id INTEGER NOT NULL,
+                    username TEXT,
+                    first_name TEXT,
+                    last_name TEXT,
+                    password TEXT NOT NULL,
+                    generation_type TEXT NOT NULL,
+                    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+                )
+            """)
+            
+            # Create index for faster queries
+            await db.execute("""
+                CREATE INDEX IF NOT EXISTS idx_password_history_user_id 
+                ON password_history(user_id)
+            """)
+            
+            await db.execute("""
+                CREATE INDEX IF NOT EXISTS idx_password_history_created_at 
+                ON password_history(created_at DESC)
+            """)
+            
+            # Password Manager table
+            await db.execute("""
+                CREATE TABLE IF NOT EXISTS password_manager (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    user_id INTEGER NOT NULL,
+                    service_name TEXT NOT NULL,
+                    username TEXT,
+                    password TEXT NOT NULL,
+                    notes TEXT,
+                    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+                )
+            """)
+            
+            # Create indexes for faster queries
+            await db.execute("""
+                CREATE INDEX IF NOT EXISTS idx_password_manager_user_id 
+                ON password_manager(user_id)
+            """)
+            
+            await db.execute("""
+                CREATE INDEX IF NOT EXISTS idx_password_manager_created_at 
+                ON password_manager(created_at DESC)
+            """)
+            
+            await db.commit()
+            logger.info("Database initialized successfully")
+    except Exception as e:
+        logger.error(f"Error initializing database: {e}", exc_info=True)
+        raise
 
 async def save_password_to_db(user_id, username, first_name, last_name, password, generation_type):
     """Save password to database"""
@@ -341,7 +384,16 @@ async def ask_service_name(update: Update, context: ContextTypes.DEFAULT_TYPE) -
 
 async def receive_service_name(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     """Receive service name and ask for username"""
-    service_name = update.message.text
+    service_name = update.message.text.strip()
+    
+    # Validate service name
+    if not service_name or len(service_name) > 100:
+        await update.message.reply_text(
+            "❌ Invalid service name. Please provide a valid service name (max 100 characters).",
+            parse_mode=ParseMode.MARKDOWN_V2
+        )
+        return ASK_SERVICE
+    
     context.user_data['service_name'] = service_name
     
     keyboard = [[InlineKeyboardButton("⏭ Skip", callback_data="skip_username")]]
@@ -356,7 +408,16 @@ async def receive_service_name(update: Update, context: ContextTypes.DEFAULT_TYP
 
 async def receive_username(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     """Receive username and ask for password"""
-    username = update.message.text
+    username = update.message.text.strip()
+    
+    # Validate username length
+    if len(username) > 200:
+        await update.message.reply_text(
+            "❌ Username is too long. Please keep it under 200 characters.",
+            parse_mode=ParseMode.MARKDOWN_V2
+        )
+        return ASK_USERNAME
+    
     context.user_data['username'] = username
     
     # Check if we're saving a generated password
@@ -386,7 +447,23 @@ async def receive_username(update: Update, context: ContextTypes.DEFAULT_TYPE) -
 
 async def receive_password(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     """Receive password and ask for notes"""
-    password = update.message.text
+    password = update.message.text.strip()
+    
+    # Validate password
+    if not password:
+        await update.message.reply_text(
+            "❌ Password cannot be empty. Please provide a valid password.",
+            parse_mode=ParseMode.MARKDOWN_V2
+        )
+        return ASK_PASSWORD
+    
+    if len(password) > 500:
+        await update.message.reply_text(
+            "❌ Password is too long. Please keep it under 500 characters.",
+            parse_mode=ParseMode.MARKDOWN_V2
+        )
+        return ASK_PASSWORD
+    
     context.user_data['password_to_save'] = password
     
     keyboard = [[InlineKeyboardButton("⏭ Skip Notes", callback_data="skip_notes")]]
@@ -401,7 +478,15 @@ async def receive_password(update: Update, context: ContextTypes.DEFAULT_TYPE) -
 
 async def receive_notes_and_save(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     """Receive notes and save password to manager"""
-    notes = update.message.text if update.message else ""
+    notes = update.message.text.strip() if update.message and update.message.text else ""
+    
+    # Validate notes length
+    if len(notes) > 1000:
+        await update.message.reply_text(
+            "❌ Notes are too long. Please keep them under 1000 characters.",
+            parse_mode=ParseMode.MARKDOWN_V2
+        )
+        return ASK_NOTES
     
     user_id = update.effective_user.id
     service_name = context.user_data.get('service_name', '')
@@ -686,7 +771,7 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
         elif query.data == "generate_custom":
             # Generate custom password
             logger.info(f"Generate custom button pressed by user {user_id}")
-            await generate_custom_password(query, user_id)
+            await generate_custom_password(query, user_id, context)
             
         elif query.data == "back_to_main":
             # Go back to main menu
@@ -809,11 +894,11 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
             context.user_data.clear()
             
     except Exception as e:
-        logger.error(f"Error in button_handler: {e}")
+        logger.error(f"Error in button_handler: {e}", exc_info=True)
         try:
             await query.answer("Произошла ошибка. Попробуйте еще раз.")
-        except:
-            pass
+        except Exception as e2:
+            logger.error(f"Error answering query: {e2}")
 
 async def show_detailed_options(query, user_id):
     """Show detailed password generation options"""
@@ -937,7 +1022,7 @@ async def handle_length_selection(query, user_id):
         # Go back to detailed options
         await show_detailed_options(query, user_id)
 
-async def generate_custom_password(query, user_id):
+async def generate_custom_password(query, user_id, context: ContextTypes.DEFAULT_TYPE):
     """Generate custom password based on user settings"""
     logger.info(f"Generating custom password for user {user_id}")
     if user_id not in user_settings:
@@ -974,7 +1059,6 @@ async def generate_custom_password(query, user_id):
     )
     
     # Store password in context for saving to manager
-    context = query._context
     context.user_data['last_generated_password'] = password
     
     # Format password in monospace for easy copying
@@ -1059,7 +1143,8 @@ _Tap the password to copy_"""
                     reply_markup=reply_markup,
                     parse_mode=ParseMode.MARKDOWN_V2
                 )
-            except:
+            except Exception as e3:
+                logger.error(f"Error in final fallback: {e3}")
                 # Last resort - plain text
                 plain_text = f"🔐 Your custom password:\n\n{password}\n\nLength: {settings['length']}\n\nTap the password to copy"
                 await query.edit_message_text(
@@ -1169,8 +1254,9 @@ async def show_password_history_page(query, user_id, page=1):
                 # Parse SQLite datetime format
                 dt = datetime.fromisoformat(created_at.replace('Z', '+00:00'))
                 formatted_date = dt.strftime("%d.%m.%Y %H:%M")
-            except:
-                formatted_date = created_at
+            except (ValueError, AttributeError, TypeError) as e:
+                logger.warning(f"Error parsing date {created_at}: {e}")
+                formatted_date = str(created_at) if created_at else "Unknown"
             
             # Use monospace for passwords to make them copyable
             safe_password = safe_monospace_password(password)
@@ -1217,8 +1303,9 @@ async def show_password_history_page(query, user_id, page=1):
                 try:
                     dt = datetime.fromisoformat(created_at.replace('Z', '+00:00'))
                     formatted_date = dt.strftime("%d.%m.%Y %H:%M")
-                except:
-                    formatted_date = created_at
+                except (ValueError, AttributeError, TypeError) as e:
+                    logger.warning(f"Error parsing date {created_at}: {e}")
+                    formatted_date = str(created_at) if created_at else "Unknown"
                     
                 safe_password = safe_monospace_password(password)
                 simple_history += f"{i}. {safe_password}\n"
@@ -1256,8 +1343,9 @@ async def show_password_history_page(query, user_id, page=1):
                 try:
                     dt = datetime.fromisoformat(created_at.replace('Z', '+00:00'))
                     formatted_date = dt.strftime("%d.%m.%Y %H:%M")
-                except:
-                    formatted_date = created_at
+                except (ValueError, AttributeError, TypeError) as e:
+                    logger.warning(f"Error parsing date {created_at}: {e}")
+                    formatted_date = str(created_at) if created_at else "Unknown"
                     
                 plain_history += f"{i}. {password}\n"
                 plain_history += f"   📅 {formatted_date} | 🔧 {generation_type}\n\n"
@@ -1407,9 +1495,6 @@ async def admin_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
     """Admin command to view all passwords (restricted access)"""
     user_id = update.effective_user.id
     
-    # Add your admin user IDs here
-    ADMIN_IDS = [250800600]  # Replace with actual admin Telegram IDs
-    
     if user_id not in ADMIN_IDS:
         await update.message.reply_text("❌ Access denied. This command is for administrators only.")
         return
@@ -1432,7 +1517,6 @@ async def admin_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
 async def show_all_passwords_page(query, admin_user_id, page=1):
     """Show all passwords with pagination (admin only)"""
     # Verify admin access
-    ADMIN_IDS = [250800600]  # Replace with actual admin Telegram IDs
     if admin_user_id not in ADMIN_IDS:
         await query.answer("❌ Access denied")
         return
@@ -1560,7 +1644,6 @@ async def show_all_passwords_page(query, admin_user_id, page=1):
 # Add handler for admin menu callback
 async def handle_admin_callbacks(query, user_id):
     """Handle admin-specific callbacks"""
-    ADMIN_IDS = [250800600]  # Replace with actual admin Telegram IDs
     if user_id not in ADMIN_IDS:
         await query.answer("❌ Access denied")
         return
@@ -1649,7 +1732,20 @@ async def handle_admin_callbacks(query, user_id):
 async def handle_text_messages(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """Handle text messages during password adding conversation"""
     user_id = update.effective_user.id
-    text = update.message.text
+    
+    # Validate message
+    if not update.message or not update.message.text:
+        return
+    
+    text = update.message.text.strip()
+    
+    # Validate text length
+    if len(text) > 500:
+        await update.message.reply_text(
+            "❌ Text is too long. Please keep it under 500 characters.",
+            parse_mode=ParseMode.MARKDOWN_V2
+        )
+        return
     
     # Check if user is in a conversation
     if not context.user_data.get('adding_password') and not context.user_data.get('waiting_for_service'):
@@ -1790,9 +1886,6 @@ async def db_info_command(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
     """Show database info (admin only)"""
     user_id = update.effective_user.id
     
-    # Add your admin user IDs here
-    ADMIN_IDS = [250800600]  # Replace with actual admin Telegram IDs
-    
     if user_id not in ADMIN_IDS:
         await update.message.reply_text("❌ Access denied. This command is for administrators only.")
         return
@@ -1840,50 +1933,61 @@ async def db_info_command(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
 
 def main() -> None:
     """Start the bot"""
-    # Create the Application
-    application = Application.builder().token(BOT_TOKEN).build()
-    
-    # Add handlers
-    application.add_handler(CommandHandler("start", start))
-    application.add_handler(CommandHandler("help", help_command))
-    application.add_handler(CommandHandler("debug", debug_command))
-    application.add_handler(CommandHandler("stats", stats_command))
-    application.add_handler(CommandHandler("admin", admin_command))
-    application.add_handler(CommandHandler("dbinfo", db_info_command))
-    
-    # Add delete command handler with pattern matching
-    from telegram.ext import filters as Filters
-    application.add_handler(MessageHandler(
-        Filters.Regex(r'^/delete_\d+$'), 
-        delete_password_command
-    ))
-    
-    # Add text message handler for conversation
-    application.add_handler(MessageHandler(
-        Filters.TEXT & ~Filters.COMMAND, 
-        handle_text_messages
-    ))
-    
-    application.add_handler(CallbackQueryHandler(button_handler))
-    
-    # Initialize database
-    async def init_db():
-        await init_database()
-    
-    # Run database initialization
-    asyncio.get_event_loop().run_until_complete(init_db())
-    
-    # Run the bot using polling (works better for Railway)
-    logger.info("Starting bot with polling...")
-    application.run_polling(
-        poll_interval=1.0,
-        timeout=10,
-        bootstrap_retries=5,
-        read_timeout=10,
-        write_timeout=10,
-        connect_timeout=10,
-        pool_timeout=10
-    )
+    try:
+        # Create the Application
+        application = Application.builder().token(BOT_TOKEN).build()
+        
+        # Add handlers
+        application.add_handler(CommandHandler("start", start))
+        application.add_handler(CommandHandler("help", help_command))
+        application.add_handler(CommandHandler("debug", debug_command))
+        application.add_handler(CommandHandler("stats", stats_command))
+        application.add_handler(CommandHandler("admin", admin_command))
+        application.add_handler(CommandHandler("dbinfo", db_info_command))
+        
+        # Add delete command handler with pattern matching
+        from telegram.ext import filters as Filters
+        application.add_handler(MessageHandler(
+            Filters.Regex(r'^/delete_\d+$'), 
+            delete_password_command
+        ))
+        
+        # Add text message handler for conversation
+        application.add_handler(MessageHandler(
+            Filters.TEXT & ~Filters.COMMAND, 
+            handle_text_messages
+        ))
+        
+        application.add_handler(CallbackQueryHandler(button_handler))
+        
+        # Initialize database
+        async def init_db():
+            try:
+                await init_database()
+            except Exception as e:
+                logger.error(f"Failed to initialize database: {e}", exc_info=True)
+                raise
+        
+        # Run database initialization
+        asyncio.get_event_loop().run_until_complete(init_db())
+        
+        # Run the bot using polling (works better for Railway)
+        logger.info("Starting bot with polling...")
+        application.run_polling(
+            poll_interval=1.0,
+            timeout=10,
+            bootstrap_retries=5,
+            read_timeout=10,
+            write_timeout=10,
+            connect_timeout=10,
+            pool_timeout=10,
+            drop_pending_updates=True
+        )
+    except KeyboardInterrupt:
+        logger.info("Bot stopped by user")
+    except Exception as e:
+        logger.error(f"Fatal error in main: {e}", exc_info=True)
+        raise
 
 if __name__ == "__main__":
     main()
