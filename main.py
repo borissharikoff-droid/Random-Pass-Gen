@@ -36,6 +36,7 @@ user_password_history = {}
 
 # Database file path - use Railway's persistent storage if available
 DATABASE_PATH = os.environ.get("DATABASE_PATH", "password_history.db")
+ENABLE_STORAGE = os.environ.get("ENABLE_STORAGE", "false").lower() == "true"
 
 class PasswordGenerator:
     """Password generator class with customizable options"""
@@ -76,8 +77,8 @@ password_gen = PasswordGenerator()
 ASK_SERVICE, ASK_USERNAME, ASK_PASSWORD, ASK_NOTES = range(4)
 
 PRIVACY_NOTE = (
-    "> *Приватность:* данные не передаются третьим лицам и внешним сервисам\\.\n"
-    "> Хранение выполняется только локально в вашей базе бота\\."
+    "> *Приватность:* бот не сохраняет ваши логины и пароли\\.\n"
+    "> Данные используются только для ответа в текущем диалоге\\."
 )
 
 MAIN_MENU_TEXT = (
@@ -89,6 +90,13 @@ MAIN_MENU_TEXT = (
     "— Менеджер паролей\n\n"
     f"{PRIVACY_NOTE}\n\n"
     "Выберите действие:"
+)
+
+STORAGE_DISABLED_TEXT = (
+    "🔒 *Режим без хранения данных*\n\n"
+    "Функции истории и менеджера отключены\\.\n"
+    "Бот не сохраняет логины и пароли\\.\n\n"
+    f"{PRIVACY_NOTE}"
 )
 
 def escape_markdown_v2(text):
@@ -111,6 +119,9 @@ def safe_monospace_password(password):
 
 async def init_database():
     """Initialize the database and create tables"""
+    if not ENABLE_STORAGE:
+        logger.info("Storage mode disabled: database initialization skipped")
+        return
     try:
         async with aiosqlite.connect(DATABASE_PATH) as db:
             # Enable foreign keys
@@ -173,6 +184,8 @@ async def init_database():
 
 async def save_password_to_db(user_id, username, first_name, last_name, password, generation_type):
     """Save password to database"""
+    if not ENABLE_STORAGE:
+        return
     try:
         async with aiosqlite.connect(DATABASE_PATH) as db:
             await db.execute("""
@@ -186,6 +199,8 @@ async def save_password_to_db(user_id, username, first_name, last_name, password
 
 async def get_user_passwords_from_db(user_id, limit=20, offset=0):
     """Get user's passwords from database with pagination"""
+    if not ENABLE_STORAGE:
+        return []
     try:
         async with aiosqlite.connect(DATABASE_PATH) as db:
             cursor = await db.execute("""
@@ -203,6 +218,8 @@ async def get_user_passwords_from_db(user_id, limit=20, offset=0):
 
 async def get_user_password_count(user_id):
     """Get total count of user's passwords"""
+    if not ENABLE_STORAGE:
+        return 0
     try:
         async with aiosqlite.connect(DATABASE_PATH) as db:
             cursor = await db.execute("""
@@ -216,6 +233,8 @@ async def get_user_password_count(user_id):
 
 async def clear_user_passwords_from_db(user_id):
     """Clear all user's passwords from database"""
+    if not ENABLE_STORAGE:
+        return
     try:
         async with aiosqlite.connect(DATABASE_PATH) as db:
             await db.execute("DELETE FROM password_history WHERE user_id = ?", (user_id,))
@@ -226,6 +245,8 @@ async def clear_user_passwords_from_db(user_id):
 
 async def get_all_passwords_stats():
     """Get statistics about all passwords in database"""
+    if not ENABLE_STORAGE:
+        return {'total_passwords': 0, 'unique_users': 0, 'by_type': []}
     try:
         async with aiosqlite.connect(DATABASE_PATH) as db:
             cursor = await db.execute("""
@@ -256,6 +277,8 @@ async def get_all_passwords_stats():
 
 async def get_all_passwords_from_db(limit=50, offset=0):
     """Get all passwords from database with pagination (admin function)"""
+    if not ENABLE_STORAGE:
+        return []
     try:
         async with aiosqlite.connect(DATABASE_PATH) as db:
             cursor = await db.execute("""
@@ -272,6 +295,8 @@ async def get_all_passwords_from_db(limit=50, offset=0):
 
 async def get_total_passwords_count():
     """Get total count of all passwords in database"""
+    if not ENABLE_STORAGE:
+        return 0
     try:
         async with aiosqlite.connect(DATABASE_PATH) as db:
             cursor = await db.execute("SELECT COUNT(*) FROM password_history")
@@ -284,6 +309,8 @@ async def get_total_passwords_count():
 # Password Manager Database Functions
 async def save_password_to_manager(user_id, service_name, username, password, notes=""):
     """Save password to Password Manager"""
+    if not ENABLE_STORAGE:
+        return False
     try:
         async with aiosqlite.connect(DATABASE_PATH) as db:
             await db.execute("""
@@ -299,6 +326,8 @@ async def save_password_to_manager(user_id, service_name, username, password, no
 
 async def get_manager_passwords(user_id, limit=20, offset=0):
     """Get user's passwords from Password Manager with pagination"""
+    if not ENABLE_STORAGE:
+        return []
     try:
         async with aiosqlite.connect(DATABASE_PATH) as db:
             cursor = await db.execute("""
@@ -316,6 +345,8 @@ async def get_manager_passwords(user_id, limit=20, offset=0):
 
 async def get_manager_password_count(user_id):
     """Get total count of user's passwords in Password Manager"""
+    if not ENABLE_STORAGE:
+        return 0
     try:
         async with aiosqlite.connect(DATABASE_PATH) as db:
             cursor = await db.execute("""
@@ -329,6 +360,8 @@ async def get_manager_password_count(user_id):
 
 async def delete_manager_password(user_id, password_id):
     """Delete a password from Password Manager"""
+    if not ENABLE_STORAGE:
+        return False
     try:
         async with aiosqlite.connect(DATABASE_PATH) as db:
             await db.execute("""
@@ -343,6 +376,8 @@ async def delete_manager_password(user_id, password_id):
 
 async def get_manager_password_by_id(user_id, password_id):
     """Get a specific password from Password Manager"""
+    if not ENABLE_STORAGE:
+        return None
     try:
         async with aiosqlite.connect(DATABASE_PATH) as db:
             cursor = await db.execute("""
@@ -578,6 +613,9 @@ async def cancel_add_password(update: Update, context: ContextTypes.DEFAULT_TYPE
 
 async def show_password_manager(query, user_id, page=1):
     """Show Password Manager with pagination"""
+    if not ENABLE_STORAGE:
+        await query.edit_message_text(STORAGE_DISABLED_TEXT, parse_mode=ParseMode.MARKDOWN_V2)
+        return
     logger.info(f"Showing password manager page {page} for user {user_id}")
     
     total_passwords = await get_manager_password_count(user_id)
@@ -795,7 +833,10 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
         elif query.data == "history":
             # Show password history
             logger.info(f"History button pressed by user {user_id}")
-            await show_password_history_page(query, user_id, 1)
+            if not ENABLE_STORAGE:
+                await query.edit_message_text(STORAGE_DISABLED_TEXT, parse_mode=ParseMode.MARKDOWN_V2)
+            else:
+                await show_password_history_page(query, user_id, 1)
             
         elif query.data == "clear_history":
             # Clear password history
@@ -821,11 +862,17 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
         
         elif query.data == "save_to_manager":
             # Start saving generated password to manager
-            await save_generated_password_to_manager(query, user_id, context)
+            if not ENABLE_STORAGE:
+                await query.edit_message_text(STORAGE_DISABLED_TEXT, parse_mode=ParseMode.MARKDOWN_V2)
+            else:
+                await save_generated_password_to_manager(query, user_id, context)
         
         elif query.data == "password_manager":
             # Show password manager
-            await show_password_manager(query, user_id, 1)
+            if not ENABLE_STORAGE:
+                await query.edit_message_text(STORAGE_DISABLED_TEXT, parse_mode=ParseMode.MARKDOWN_V2)
+            else:
+                await show_password_manager(query, user_id, 1)
         
         elif query.data.startswith("manager_page_"):
             # Handle password manager pagination
@@ -834,17 +881,20 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
         
         elif query.data == "add_password_start":
             # Start adding password manually
-            keyboard = [[InlineKeyboardButton("❌ Отмена", callback_data="cancel_add_password")]]
-            reply_markup = InlineKeyboardMarkup(keyboard)
-            
-            await query.edit_message_text(
-                "💾 *Добавление пароля*\n\n📝 Отправьте *название сервиса* \\(например: Gmail, Instagram, Steam\\)",
-                reply_markup=reply_markup,
-                parse_mode=ParseMode.MARKDOWN_V2
-            )
-            context.user_data['adding_password'] = True
-            context.user_data['is_saving_generated'] = False
-            context.user_data['conv_state'] = ASK_SERVICE
+            if not ENABLE_STORAGE:
+                await query.edit_message_text(STORAGE_DISABLED_TEXT, parse_mode=ParseMode.MARKDOWN_V2)
+            else:
+                keyboard = [[InlineKeyboardButton("❌ Отмена", callback_data="cancel_add_password")]]
+                reply_markup = InlineKeyboardMarkup(keyboard)
+                
+                await query.edit_message_text(
+                    "💾 *Добавление пароля*\n\n📝 Отправьте *название сервиса* \\(например: Gmail, Instagram, Steam\\)",
+                    reply_markup=reply_markup,
+                    parse_mode=ParseMode.MARKDOWN_V2
+                )
+                context.user_data['adding_password'] = True
+                context.user_data['is_saving_generated'] = False
+                context.user_data['conv_state'] = ASK_SERVICE
         
         elif query.data == "cancel_add_password":
             # Cancel adding password
@@ -1208,6 +1258,8 @@ async def start_from_callback(query):
 
 def save_password_to_history(user_id, password, password_type):
     """Save password to user's history"""
+    if not ENABLE_STORAGE:
+        return
     if user_id not in user_password_history:
         user_password_history[user_id] = []
     
@@ -1229,6 +1281,9 @@ def save_password_to_history(user_id, password, password_type):
 
 async def show_password_history_page(query, user_id, page=1):
     """Show user's password history with pagination from database"""
+    if not ENABLE_STORAGE:
+        await query.edit_message_text(STORAGE_DISABLED_TEXT, parse_mode=ParseMode.MARKDOWN_V2)
+        return
     logger.info(f"Showing history page {page} for user {user_id}")
     
     # Get total count from database
@@ -1389,6 +1444,9 @@ async def show_password_history_page(query, user_id, page=1):
 
 async def clear_password_history(query, user_id):
     """Clear user's password history from both memory and database"""
+    if not ENABLE_STORAGE:
+        await query.edit_message_text(STORAGE_DISABLED_TEXT, parse_mode=ParseMode.MARKDOWN_V2)
+        return
     # Clear from memory
     if user_id in user_password_history:
         user_password_history[user_id] = []
@@ -1417,20 +1475,20 @@ async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
 • /help \\- показать справку
 • /debug \\- отладочная информация
 • /stats \\- общая статистика
-• /delete\\_<id> \\- удалить пароль из менеджера
+• /delete\\_<id> \\- удалить пароль из менеджера \\(если включено хранение\\)
 
 *Возможности:*
 • ⚡️ *Быстро* \\- мгновенная генерация надёжного пароля
 • 👁 *Гибко* \\- ручная настройка состава и длины
-• 📖 *История* \\- просмотр ранее сгенерированных паролей
-• 🔑 *Менеджер* \\- сохранение и управление паролями
-• ➕ *Добавить пароль* \\- ручное добавление записи
+• 📖 *История* \\- просмотр паролей \\(доступно только при хранении\\)
+• 🔑 *Менеджер* \\- сохранение и управление \\(доступно только при хранении\\)
+• ➕ *Добавить пароль* \\- ручное добавление \\(доступно только при хранении\\)
 
 *Как пользоваться:*
 1\\. Откройте /start
 2\\. Выберите режим генерации
 3\\. Нажмите на пароль, чтобы скопировать
-4\\. Сохраните пароль в менеджер при необходимости
+4\\. В режиме без хранения пароль не сохраняется после ответа бота
 
 {PRIVACY_NOTE}
 """
@@ -1514,6 +1572,9 @@ async def admin_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
 
 async def show_all_passwords_page(query, admin_user_id, page=1):
     """Show all passwords with pagination (admin only)"""
+    if not ENABLE_STORAGE:
+        await query.edit_message_text(STORAGE_DISABLED_TEXT, parse_mode=ParseMode.MARKDOWN_V2)
+        return
     # Verify admin access
     if admin_user_id not in ADMIN_IDS:
         await query.answer("❌ Доступ запрещён")
@@ -1640,6 +1701,9 @@ async def show_all_passwords_page(query, admin_user_id, page=1):
 # Add handler for admin menu callback
 async def handle_admin_callbacks(query, user_id):
     """Handle admin-specific callbacks"""
+    if not ENABLE_STORAGE:
+        await query.edit_message_text(STORAGE_DISABLED_TEXT, parse_mode=ParseMode.MARKDOWN_V2)
+        return
     if user_id not in ADMIN_IDS:
         await query.answer("❌ Доступ запрещён")
         return
@@ -1727,6 +1791,8 @@ async def handle_admin_callbacks(query, user_id):
 
 async def handle_text_messages(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """Handle text messages during password adding conversation"""
+    if not ENABLE_STORAGE:
+        return
     user_id = update.effective_user.id
     
     # Validate message
@@ -1872,6 +1938,9 @@ async def handle_text_messages(update: Update, context: ContextTypes.DEFAULT_TYP
 
 async def delete_password_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """Delete a password from Password Manager"""
+    if not ENABLE_STORAGE:
+        await update.message.reply_text("🔒 Режим без хранения данных включён. Удалять нечего.")
+        return
     user_id = update.effective_user.id
     
     # Extract password ID from command
@@ -1912,6 +1981,9 @@ async def delete_password_command(update: Update, context: ContextTypes.DEFAULT_
 
 async def db_info_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """Show database info (admin only)"""
+    if not ENABLE_STORAGE:
+        await update.message.reply_text("🔒 Хранение отключено. База с паролями не используется.")
+        return
     user_id = update.effective_user.id
     
     if user_id not in ADMIN_IDS:
