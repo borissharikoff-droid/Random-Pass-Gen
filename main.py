@@ -2,8 +2,8 @@ import logging
 import secrets
 import string
 import os
+import re
 import aiosqlite
-import asyncio
 from datetime import datetime
 from dotenv import load_dotenv
 from telegram import InlineKeyboardButton, InlineKeyboardMarkup, Update
@@ -77,18 +77,17 @@ ASK_SERVICE, ASK_USERNAME, ASK_PASSWORD, ASK_NOTES = range(4)
 
 def escape_markdown_v2(text):
     """Escape special characters for Markdown V2"""
-    special_chars = ['_', '*', '[', ']', '(', ')', '~', '`', '>', '#', '+', '-', '=', '|', '{', '}', '.', '!']
-    for char in special_chars:
-        text = text.replace(char, f'\\{char}')
-    return text
+    value = "" if text is None else str(text)
+    return re.sub(r'([\\_*\[\]()~`>#+\-=|{}.!])', r'\\\1', value)
 
 def safe_monospace_password(password):
     """Safely format password in monospace, handling all special characters"""
     try:
-        # Try simple monospace first
-        if password:
-            return f"`{password}`"
-        return password
+        if not password:
+            return ""
+        # For MarkdownV2 code spans, backslash and backtick must be escaped.
+        escaped = str(password).replace("\\", "\\\\").replace("`", "\\`")
+        return f"`{escaped}`"
     except (TypeError, AttributeError) as e:
         logger.error(f"Error formatting password: {e}")
         # If that fails, just return the password
@@ -363,7 +362,7 @@ async def save_generated_password_to_manager(query, user_id, context):
     reply_markup = InlineKeyboardMarkup(keyboard)
     
     await query.edit_message_text(
-        text=f"💾 *Save Password to Manager*\n\nPassword: `{password}`\n\n📝 Please send the *service name* \\(e\\.g\\., Gmail, Facebook, etc\\.\\)",
+        text=f"💾 *Save Password to Manager*\n\nPassword: {safe_monospace_password(password)}\n\n📝 Please send the *service name* \\(e\\.g\\., Gmail, Facebook, etc\\.\\)",
         reply_markup=reply_markup,
         parse_mode=ParseMode.MARKDOWN_V2
     )
@@ -380,7 +379,7 @@ async def ask_service_name(update: Update, context: ContextTypes.DEFAULT_TYPE) -
         reply_markup=reply_markup,
         parse_mode=ParseMode.MARKDOWN_V2
     )
-    return ASK_USERNAME
+    return ASK_SERVICE
 
 async def receive_service_name(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     """Receive service name and ask for username"""
@@ -400,11 +399,11 @@ async def receive_service_name(update: Update, context: ContextTypes.DEFAULT_TYP
     reply_markup = InlineKeyboardMarkup(keyboard)
     
     await update.message.reply_text(
-        f"✅ Service: *{service_name}*\n\n👤 Now send your *username or email* for this service\n\n_Or click Skip if not needed_",
+        f"✅ Service: *{escape_markdown_v2(service_name)}*\n\n👤 Now send your *username or email* for this service\n\n_Or click Skip if not needed_",
         reply_markup=reply_markup,
         parse_mode=ParseMode.MARKDOWN_V2
     )
-    return ASK_PASSWORD
+    return ASK_USERNAME
 
 async def receive_username(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     """Receive username and ask for password"""
@@ -424,12 +423,9 @@ async def receive_username(update: Update, context: ContextTypes.DEFAULT_TYPE) -
     if context.user_data.get('is_saving_generated'):
         keyboard = [[InlineKeyboardButton("⏭ Skip Notes", callback_data="skip_notes_generated")]]
         reply_markup = InlineKeyboardMarkup(keyboard)
-        
-        password = context.user_data.get('password_to_save', '')
-        service = context.user_data.get('service_name', '')
-        
+
         await update.message.reply_text(
-            f"✅ Username: *{username}*\n\n📝 Send any *notes* \\(optional\\)\n\n_Or click Skip to save now_",
+            f"✅ Username: *{escape_markdown_v2(username)}*\n\n📝 Send any *notes* \\(optional\\)\n\n_Or click Skip to save now_",
             reply_markup=reply_markup,
             parse_mode=ParseMode.MARKDOWN_V2
         )
@@ -439,11 +435,11 @@ async def receive_username(update: Update, context: ContextTypes.DEFAULT_TYPE) -
         reply_markup = InlineKeyboardMarkup(keyboard)
         
         await update.message.reply_text(
-            f"✅ Username: *{username}*\n\n🔐 Now send the *password* for this service",
+            f"✅ Username: *{escape_markdown_v2(username)}*\n\n🔐 Now send the *password* for this service",
             reply_markup=reply_markup,
             parse_mode=ParseMode.MARKDOWN_V2
         )
-        return ASK_NOTES
+        return ASK_PASSWORD
 
 async def receive_password(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     """Receive password and ask for notes"""
@@ -503,8 +499,12 @@ async def receive_notes_and_save(update: Update, context: ContextTypes.DEFAULT_T
         ]
         reply_markup = InlineKeyboardMarkup(keyboard)
         
+        safe_service = escape_markdown_v2(service_name)
+        safe_username = escape_markdown_v2(username) if username else "_not provided_"
+        safe_notes = escape_markdown_v2(notes) if notes else "_none_"
+
         await update.message.reply_text(
-            f"✅ *Password Saved Successfully\\!*\n\n📦 Service: *{service_name}*\n👤 Username: {username if username else '_not provided_'}\n🔐 Password: `{password}`\n📝 Notes: {notes if notes else '_none_'}",
+            f"✅ *Password Saved Successfully\\!*\n\n📦 Service: *{safe_service}*\n👤 Username: {safe_username}\n🔐 Password: {safe_monospace_password(password)}\n📝 Notes: {safe_notes}",
             reply_markup=reply_markup,
             parse_mode=ParseMode.MARKDOWN_V2
         )
@@ -591,14 +591,12 @@ async def show_password_manager(query, user_id, page=1):
         
         for pwd_id, service, username, password, notes, created_at in passwords:
             safe_password = safe_monospace_password(password)
-            manager_text += f"📦 *{service}*\n"
+            manager_text += f"📦 *{escape_markdown_v2(service)}*\n"
             if username:
-                manager_text += f"👤 {username}\n"
+                manager_text += f"👤 {escape_markdown_v2(username)}\n"
             manager_text += f"🔐 {safe_password}\n"
             if notes:
-                # Escape notes for MarkdownV2
-                escaped_notes = notes.replace('_', '\\_').replace('*', '\\*').replace('[', '\\[').replace(']', '\\]').replace('(', '\\(').replace(')', '\\)').replace('~', '\\~').replace('`', '\\`').replace('>', '\\>').replace('#', '\\#').replace('+', '\\+').replace('-', '\\-').replace('=', '\\=').replace('|', '\\|').replace('{', '\\{').replace('}', '\\}').replace('.', '\\.').replace('!', '\\!')
-                manager_text += f"📝 _{escaped_notes}_\n"
+                manager_text += f"📝 _{escape_markdown_v2(notes)}_\n"
             manager_text += f"🗑 /delete\\_{pwd_id}\n\n"
         
         manager_text += "_Tap password to copy_"
@@ -637,7 +635,7 @@ async def show_password_manager(query, user_id, page=1):
             simple_text += f"📦 {service}\n"
             if username:
                 simple_text += f"👤 {username}\n"
-            simple_text += f"🔐 `{password}`\n"
+            simple_text += f"🔐 {password}\n"
             if notes:
                 simple_text += f"📝 {notes}\n"
             simple_text += f"🗑 /delete_{pwd_id}\n\n"
@@ -659,8 +657,7 @@ async def show_password_manager(query, user_id, page=1):
         
         await query.edit_message_text(
             text=simple_text,
-            reply_markup=reply_markup,
-            parse_mode=ParseMode.MARKDOWN_V2
+            reply_markup=reply_markup
         )
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -727,7 +724,7 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
             context.user_data['last_generated_password'] = password
             
             # Format password in monospace for easy copying
-            password_text = f"`{password}`"
+            password_text = safe_monospace_password(password)
             
             # Create keyboard with main menu buttons and Save to Manager option
             keyboard = [
@@ -867,6 +864,14 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
             username = context.user_data.get('username', '')
             password = context.user_data.get('password_to_save', '')
             notes = ""
+
+            if not service_name or not password:
+                await query.edit_message_text(
+                    "❌ Missing service or password\\. Please start over\\.",
+                    parse_mode=ParseMode.MARKDOWN_V2
+                )
+                context.user_data.clear()
+                return
             
             success = await save_password_to_manager(user_id, service_name, username, password, notes)
             
@@ -877,11 +882,11 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
                 ]
                 reply_markup = InlineKeyboardMarkup(keyboard)
                 
-                safe_service = service_name.replace('_', '\\_').replace('*', '\\*').replace('[', '\\[').replace(']', '\\]').replace('(', '\\(').replace(')', '\\)').replace('~', '\\~').replace('`', '\\`').replace('>', '\\>').replace('#', '\\#').replace('+', '\\+').replace('-', '\\-').replace('=', '\\=').replace('|', '\\|').replace('{', '\\{').replace('}', '\\}').replace('.', '\\.').replace('!', '\\!')
-                safe_username = username.replace('_', '\\_').replace('*', '\\*').replace('[', '\\[').replace(']', '\\]').replace('(', '\\(').replace(')', '\\)').replace('~', '\\~').replace('`', '\\`').replace('>', '\\>').replace('#', '\\#').replace('+', '\\+').replace('-', '\\-').replace('=', '\\=').replace('|', '\\|').replace('{', '\\{').replace('}', '\\}').replace('.', '\\.').replace('!', '\\!') if username else '_not provided_'
+                safe_service = escape_markdown_v2(service_name)
+                safe_username = escape_markdown_v2(username) if username else '_not provided_'
                 
                 await query.edit_message_text(
-                    f"✅ *Password Saved Successfully\\!*\n\n📦 Service: *{safe_service}*\n👤 Username: {safe_username}\n🔐 Password: `{password}`",
+                    f"✅ *Password Saved Successfully\\!*\n\n📦 Service: *{safe_service}*\n👤 Username: {safe_username}\n🔐 Password: {safe_monospace_password(password)}",
                     reply_markup=reply_markup,
                     parse_mode=ParseMode.MARKDOWN_V2
                 )
@@ -977,7 +982,11 @@ async def handle_toggle(query, user_id):
                 'digits': True,
                 'symbols': True
             }
-        
+
+        if toggle_type not in {"lowercase", "uppercase", "digits", "symbols"}:
+            await query.answer("Invalid setting selected.")
+            return
+
         # Toggle the setting
         user_settings[user_id][toggle_type] = not user_settings[user_id][toggle_type]
         logger.info(f"Toggled {toggle_type} to {user_settings[user_id][toggle_type]} for user {user_id}")
@@ -1062,7 +1071,7 @@ async def generate_custom_password(query, user_id, context: ContextTypes.DEFAULT
     context.user_data['last_generated_password'] = password
     
     # Format password in monospace for easy copying
-    password_text = f"`{password}`"
+    password_text = safe_monospace_password(password)
     
     # Create keyboard with options
     keyboard = [
@@ -1121,7 +1130,7 @@ _Tap the password to copy_"""
             
             fallback_text = f"""🔐 *Your custom password:*
 
-`{password}`
+{safe_monospace_password(password)}
 
 📊 *Settings:* {escaped_features_text}
 📏 *Length:* {settings['length']}
@@ -1137,11 +1146,10 @@ _Tap the password to copy_"""
             logger.error(f"Error in fallback: {e2}")
             # Final fallback - try with just monospace password
             try:
-                simple_text = f"🔐 Your custom password:\n\n`{password}`\n\nLength: {settings['length']}\n\nTap the password to copy"
+                simple_text = f"🔐 Your custom password:\n\n{password}\n\nLength: {settings['length']}\n\nTap the password to copy"
                 await query.edit_message_text(
                     text=simple_text,
-                    reply_markup=reply_markup,
-                    parse_mode=ParseMode.MARKDOWN_V2
+                    reply_markup=reply_markup
                 )
             except Exception as e3:
                 logger.error(f"Error in final fallback: {e3}")
@@ -1187,8 +1195,6 @@ Choose your option:"""
 
 def save_password_to_history(user_id, password, password_type):
     """Save password to user's history"""
-    import datetime
-    
     if user_id not in user_password_history:
         user_password_history[user_id] = []
     
@@ -1196,7 +1202,7 @@ def save_password_to_history(user_id, password, password_type):
     history_entry = {
         'password': password,
         'type': password_type,
-        'timestamp': datetime.datetime.now().strftime("%d.%m.%Y %H:%M")
+        'timestamp': datetime.now().strftime("%d.%m.%Y %H:%M")
     }
     
     # Add to beginning of list (newest first)
@@ -1261,7 +1267,7 @@ async def show_password_history_page(query, user_id, page=1):
             # Use monospace for passwords to make them copyable
             safe_password = safe_monospace_password(password)
             history_text += f"{i}\\. {safe_password}\n"
-            history_text += f"   📅 {formatted_date} \\| 🔧 {generation_type}\n\n"
+            history_text += f"   📅 {escape_markdown_v2(formatted_date)} \\| 🔧 {escape_markdown_v2(generation_type)}\n\n"
         
         history_text += "_Tap any password to copy_"
         
@@ -1307,8 +1313,7 @@ async def show_password_history_page(query, user_id, page=1):
                     logger.warning(f"Error parsing date {created_at}: {e}")
                     formatted_date = str(created_at) if created_at else "Unknown"
                     
-                safe_password = safe_monospace_password(password)
-                simple_history += f"{i}. {safe_password}\n"
+                simple_history += f"{i}. {password}\n"
                 simple_history += f"   📅 {formatted_date} | 🔧 {generation_type}\n\n"
             
             simple_history += "Tap any password to copy"
@@ -1331,8 +1336,7 @@ async def show_password_history_page(query, user_id, page=1):
             
             await query.edit_message_text(
                 text=simple_history,
-                reply_markup=reply_markup,
-                parse_mode=ParseMode.MARKDOWN_V2
+                reply_markup=reply_markup
             )
             
         except Exception as e2:
@@ -1566,7 +1570,7 @@ async def show_all_passwords_page(query, admin_user_id, page=1):
             # Use monospace for passwords to make them copyable
             safe_password = safe_monospace_password(password)
             history_text += f"{i}\\. {safe_password}\n"
-            history_text += f"   👤 {user_info} \\| 📅 {formatted_date} \\| 🔧 {generation_type}\n\n"
+            history_text += f"   👤 {escape_markdown_v2(user_info)} \\| 📅 {escape_markdown_v2(formatted_date)} \\| 🔧 {escape_markdown_v2(generation_type)}\n\n"
         
         history_text += "_Tap any password to copy_"
         
@@ -1614,8 +1618,7 @@ async def show_all_passwords_page(query, admin_user_id, page=1):
                 if not user_info:
                     user_info = f"ID:{user_id}"
                     
-                safe_password = safe_monospace_password(password)
-                simple_history += f"{i}. {safe_password}\n"
+                simple_history += f"{i}. {password}\n"
                 simple_history += f"   👤 {user_info} | 📅 {formatted_date} | 🔧 {generation_type}\n\n"
             
             keyboard = []
@@ -1633,8 +1636,7 @@ async def show_all_passwords_page(query, admin_user_id, page=1):
             
             await query.edit_message_text(
                 text=simple_history,
-                reply_markup=reply_markup,
-                parse_mode=ParseMode.MARKDOWN_V2
+                reply_markup=reply_markup
             )
             
         except Exception as e2:
@@ -1707,8 +1709,8 @@ async def handle_admin_callbacks(query, user_id):
                     if not user_info:
                         user_info = f"ID:{user_id}"
                     
-                    export_text += f"{i}\\. `{password}` \\({gen_type}\\)\n"
-                    export_text += f"   👤 {user_info} \\| 📅 {created_at}\n\n"
+                    export_text += f"{i}\\. {safe_monospace_password(password)} \\({escape_markdown_v2(gen_type)}\\)\n"
+                    export_text += f"   👤 {escape_markdown_v2(user_info)} \\| 📅 {escape_markdown_v2(created_at)}\n\n"
                 
                 if len(rows) > 20:
                     export_text += f"_\\.\\.\\. and {len(rows) - 20} more records_"
@@ -1739,14 +1741,6 @@ async def handle_text_messages(update: Update, context: ContextTypes.DEFAULT_TYP
     
     text = update.message.text.strip()
     
-    # Validate text length
-    if len(text) > 500:
-        await update.message.reply_text(
-            "❌ Text is too long. Please keep it under 500 characters.",
-            parse_mode=ParseMode.MARKDOWN_V2
-        )
-        return
-    
     # Check if user is in a conversation
     if not context.user_data.get('adding_password') and not context.user_data.get('waiting_for_service'):
         return
@@ -1761,21 +1755,33 @@ async def handle_text_messages(update: Update, context: ContextTypes.DEFAULT_TYP
             return
     
     if state == ASK_SERVICE:
+        if not text or len(text) > 100:
+            await update.message.reply_text(
+                "❌ Invalid service name. Please provide a valid service name (max 100 characters).",
+                parse_mode=ParseMode.MARKDOWN_V2
+            )
+            return
+
         # Received service name
         context.user_data['service_name'] = text
         keyboard = [[InlineKeyboardButton("⏭ Skip", callback_data="skip_username")]]
         reply_markup = InlineKeyboardMarkup(keyboard)
         
-        safe_text = text.replace('_', '\\_').replace('*', '\\*').replace('[', '\\[').replace(']', '\\]').replace('(', '\\(').replace(')', '\\)').replace('~', '\\~').replace('`', '\\`').replace('>', '\\>').replace('#', '\\#').replace('+', '\\+').replace('-', '\\-').replace('=', '\\=').replace('|', '\\|').replace('{', '\\{').replace('}', '\\}').replace('.', '\\.').replace('!', '\\!')
-        
         await update.message.reply_text(
-            f"✅ Service: *{safe_text}*\n\n👤 Now send your *username or email* for this service\n\n_Or click Skip if not needed_",
+            f"✅ Service: *{escape_markdown_v2(text)}*\n\n👤 Now send your *username or email* for this service\n\n_Or click Skip if not needed_",
             reply_markup=reply_markup,
             parse_mode=ParseMode.MARKDOWN_V2
         )
         context.user_data['conv_state'] = ASK_USERNAME
         
     elif state == ASK_USERNAME:
+        if len(text) > 200:
+            await update.message.reply_text(
+                "❌ Username is too long. Please keep it under 200 characters.",
+                parse_mode=ParseMode.MARKDOWN_V2
+            )
+            return
+
         # Received username
         context.user_data['username'] = text
         
@@ -1784,19 +1790,32 @@ async def handle_text_messages(update: Update, context: ContextTypes.DEFAULT_TYP
             reply_markup = InlineKeyboardMarkup(keyboard)
             
             await update.message.reply_text(
-                f"✅ Username: *{text}*\n\n📝 Send any *notes* \\(optional\\)\n\n_Or click Skip to save now_",
+                f"✅ Username: *{escape_markdown_v2(text)}*\n\n📝 Send any *notes* \\(optional\\)\n\n_Or click Skip to save now_",
                 reply_markup=reply_markup,
                 parse_mode=ParseMode.MARKDOWN_V2
             )
             context.user_data['conv_state'] = ASK_NOTES
         else:
             await update.message.reply_text(
-                f"✅ Username: *{text}*\n\n🔐 Now send the *password* for this service",
+                f"✅ Username: *{escape_markdown_v2(text)}*\n\n🔐 Now send the *password* for this service",
                 parse_mode=ParseMode.MARKDOWN_V2
             )
             context.user_data['conv_state'] = ASK_PASSWORD
             
     elif state == ASK_PASSWORD:
+        if not text:
+            await update.message.reply_text(
+                "❌ Password cannot be empty. Please provide a valid password.",
+                parse_mode=ParseMode.MARKDOWN_V2
+            )
+            return
+        if len(text) > 500:
+            await update.message.reply_text(
+                "❌ Password is too long. Please keep it under 500 characters.",
+                parse_mode=ParseMode.MARKDOWN_V2
+            )
+            return
+
         # Received password
         context.user_data['password_to_save'] = text
         keyboard = [[InlineKeyboardButton("⏭ Skip Notes", callback_data="skip_notes")]]
@@ -1810,11 +1829,26 @@ async def handle_text_messages(update: Update, context: ContextTypes.DEFAULT_TYP
         context.user_data['conv_state'] = ASK_NOTES
         
     elif state == ASK_NOTES:
+        if len(text) > 1000:
+            await update.message.reply_text(
+                "❌ Notes are too long. Please keep them under 1000 characters.",
+                parse_mode=ParseMode.MARKDOWN_V2
+            )
+            return
+
         # Received notes, save everything
         notes = text
         service_name = context.user_data.get('service_name', '')
         username = context.user_data.get('username', '')
         password = context.user_data.get('password_to_save', '')
+
+        if not service_name or not password:
+            await update.message.reply_text(
+                "❌ Missing service or password\\. Please start over\\.",
+                parse_mode=ParseMode.MARKDOWN_V2
+            )
+            context.user_data.clear()
+            return
         
         success = await save_password_to_manager(user_id, service_name, username, password, notes)
         
@@ -1825,12 +1859,12 @@ async def handle_text_messages(update: Update, context: ContextTypes.DEFAULT_TYP
             ]
             reply_markup = InlineKeyboardMarkup(keyboard)
             
-            safe_service = service_name.replace('_', '\\_').replace('*', '\\*').replace('[', '\\[').replace(']', '\\]').replace('(', '\\(').replace(')', '\\)').replace('~', '\\~').replace('`', '\\`').replace('>', '\\>').replace('#', '\\#').replace('+', '\\+').replace('-', '\\-').replace('=', '\\=').replace('|', '\\|').replace('{', '\\{').replace('}', '\\}').replace('.', '\\.').replace('!', '\\!')
-            safe_username = username.replace('_', '\\_').replace('*', '\\*').replace('[', '\\[').replace(']', '\\]').replace('(', '\\(').replace(')', '\\)').replace('~', '\\~').replace('`', '\\`').replace('>', '\\>').replace('#', '\\#').replace('+', '\\+').replace('-', '\\-').replace('=', '\\=').replace('|', '\\|').replace('{', '\\{').replace('}', '\\}').replace('.', '\\.').replace('!', '\\!') if username else '_not provided_'
-            safe_notes = notes.replace('_', '\\_').replace('*', '\\*').replace('[', '\\[').replace(']', '\\]').replace('(', '\\(').replace(')', '\\)').replace('~', '\\~').replace('`', '\\`').replace('>', '\\>').replace('#', '\\#').replace('+', '\\+').replace('-', '\\-').replace('=', '\\=').replace('|', '\\|').replace('{', '\\{').replace('}', '\\}').replace('.', '\\.').replace('!', '\\!')
+            safe_service = escape_markdown_v2(service_name)
+            safe_username = escape_markdown_v2(username) if username else '_not provided_'
+            safe_notes = escape_markdown_v2(notes)
             
             await update.message.reply_text(
-                f"✅ *Password Saved Successfully\\!*\n\n📦 Service: *{safe_service}*\n👤 Username: {safe_username}\n🔐 Password: `{password}`\n📝 Notes: {safe_notes}",
+                f"✅ *Password Saved Successfully\\!*\n\n📦 Service: *{safe_service}*\n👤 Username: {safe_username}\n🔐 Password: {safe_monospace_password(password)}\n📝 Notes: {safe_notes}",
                 reply_markup=reply_markup,
                 parse_mode=ParseMode.MARKDOWN_V2
             )
@@ -1875,7 +1909,7 @@ async def delete_password_command(update: Update, context: ContextTypes.DEFAULT_
         
         service_name = password[1]
         await update.message.reply_text(
-            f"✅ *Password Deleted*\n\n📦 Service: {service_name} has been removed from your Password Manager\\.",
+            f"✅ *Password Deleted*\n\n📦 Service: {escape_markdown_v2(service_name)} has been removed from your Password Manager\\.",
             reply_markup=reply_markup,
             parse_mode=ParseMode.MARKDOWN_V2
         )
@@ -1943,11 +1977,19 @@ async def db_info_command(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
             parse_mode=ParseMode.MARKDOWN_V2
         )
 
+async def on_startup(_: Application) -> None:
+    """Initialize resources before polling starts."""
+    try:
+        await init_database()
+    except Exception as e:
+        logger.error(f"Failed to initialize database: {e}", exc_info=True)
+        raise
+
 def main() -> None:
     """Start the bot"""
     try:
         # Create the Application
-        application = Application.builder().token(BOT_TOKEN).build()
+        application = Application.builder().token(BOT_TOKEN).post_init(on_startup).build()
         
         # Add handlers
         application.add_handler(CommandHandler("start", start))
@@ -1971,17 +2013,6 @@ def main() -> None:
         ))
         
         application.add_handler(CallbackQueryHandler(button_handler))
-        
-        # Initialize database
-        async def init_db():
-            try:
-                await init_database()
-            except Exception as e:
-                logger.error(f"Failed to initialize database: {e}", exc_info=True)
-                raise
-        
-        # Run database initialization
-        asyncio.get_event_loop().run_until_complete(init_db())
         
         # Run the bot using polling (works better for Railway)
         logger.info("Starting bot with polling...")
