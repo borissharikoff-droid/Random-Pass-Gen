@@ -75,6 +75,22 @@ password_gen = PasswordGenerator()
 # Conversation states for adding password manually
 ASK_SERVICE, ASK_USERNAME, ASK_PASSWORD, ASK_NOTES = range(4)
 
+PRIVACY_NOTE = (
+    "> *Приватность:* данные не передаются третьим лицам и внешним сервисам\\.\n"
+    "> Хранение выполняется только локально в вашей базе бота\\."
+)
+
+MAIN_MENU_TEXT = (
+    "🔐 *Dox: Pass Gen*\n\n"
+    "*Главное меню*\n"
+    "— Быстрая генерация\n"
+    "— Гибкая генерация\n"
+    "— История паролей\n"
+    "— Менеджер паролей\n\n"
+    f"{PRIVACY_NOTE}\n\n"
+    "Выберите действие:"
+)
+
 def escape_markdown_v2(text):
     """Escape special characters for Markdown V2"""
     value = "" if text is None else str(text)
@@ -347,7 +363,7 @@ async def save_generated_password_to_manager(query, user_id, context):
     
     if not password:
         await query.edit_message_text(
-            "❌ No password found to save\\. Please generate a password first\\.",
+            "❌ Пароль для сохранения не найден\\. Сначала сгенерируйте пароль\\.",
             parse_mode=ParseMode.MARKDOWN_V2
         )
         return
@@ -358,11 +374,16 @@ async def save_generated_password_to_manager(query, user_id, context):
     context.user_data['waiting_for_service'] = True
     context.user_data['conv_state'] = ASK_SERVICE
     
-    keyboard = [[InlineKeyboardButton("❌ Cancel", callback_data="cancel_add_password")]]
+    keyboard = [[InlineKeyboardButton("❌ Отмена", callback_data="cancel_add_password")]]
     reply_markup = InlineKeyboardMarkup(keyboard)
     
     await query.edit_message_text(
-        text=f"💾 *Save Password to Manager*\n\nPassword: {safe_monospace_password(password)}\n\n📝 Please send the *service name* \\(e\\.g\\., Gmail, Facebook, etc\\.\\)",
+        text=(
+            f"💾 *Сохранение в менеджер*\n\n"
+            f"*Пароль:* {safe_monospace_password(password)}\n\n"
+            "📝 Отправьте *название сервиса* \\(например: Gmail, Steam, GitHub\\)\n\n"
+            f"{PRIVACY_NOTE}"
+        ),
         reply_markup=reply_markup,
         parse_mode=ParseMode.MARKDOWN_V2
     )
@@ -371,11 +392,11 @@ async def save_generated_password_to_manager(query, user_id, context):
 
 async def ask_service_name(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     """Ask for service name when adding password manually"""
-    keyboard = [[InlineKeyboardButton("❌ Cancel", callback_data="cancel_add_password")]]
+    keyboard = [[InlineKeyboardButton("❌ Отмена", callback_data="cancel_add_password")]]
     reply_markup = InlineKeyboardMarkup(keyboard)
     
     await update.message.reply_text(
-        "💾 *Add Password to Manager*\n\n📝 Please send the *service name* \\(e\\.g\\., Gmail, Facebook, Instagram\\)",
+        "💾 *Добавление пароля*\n\n📝 Отправьте *название сервиса* \\(например: Gmail, Instagram, Steam\\)",
         reply_markup=reply_markup,
         parse_mode=ParseMode.MARKDOWN_V2
     )
@@ -388,18 +409,18 @@ async def receive_service_name(update: Update, context: ContextTypes.DEFAULT_TYP
     # Validate service name
     if not service_name or len(service_name) > 100:
         await update.message.reply_text(
-            "❌ Invalid service name. Please provide a valid service name (max 100 characters).",
+            "❌ Некорректное название сервиса\\. Допустимая длина: до 100 символов\\.",
             parse_mode=ParseMode.MARKDOWN_V2
         )
         return ASK_SERVICE
     
     context.user_data['service_name'] = service_name
     
-    keyboard = [[InlineKeyboardButton("⏭ Skip", callback_data="skip_username")]]
+    keyboard = [[InlineKeyboardButton("⏭ Пропустить", callback_data="skip_username")]]
     reply_markup = InlineKeyboardMarkup(keyboard)
     
     await update.message.reply_text(
-        f"✅ Service: *{escape_markdown_v2(service_name)}*\n\n👤 Now send your *username or email* for this service\n\n_Or click Skip if not needed_",
+        f"✅ Сервис: *{escape_markdown_v2(service_name)}*\n\n👤 Отправьте *логин или e\\-mail* для этого сервиса\n\n_Или нажмите «Пропустить»_",
         reply_markup=reply_markup,
         parse_mode=ParseMode.MARKDOWN_V2
     )
@@ -412,7 +433,7 @@ async def receive_username(update: Update, context: ContextTypes.DEFAULT_TYPE) -
     # Validate username length
     if len(username) > 200:
         await update.message.reply_text(
-            "❌ Username is too long. Please keep it under 200 characters.",
+            "❌ Логин слишком длинный\\. Допустимо до 200 символов\\.",
             parse_mode=ParseMode.MARKDOWN_V2
         )
         return ASK_USERNAME
@@ -421,21 +442,21 @@ async def receive_username(update: Update, context: ContextTypes.DEFAULT_TYPE) -
     
     # Check if we're saving a generated password
     if context.user_data.get('is_saving_generated'):
-        keyboard = [[InlineKeyboardButton("⏭ Skip Notes", callback_data="skip_notes_generated")]]
+        keyboard = [[InlineKeyboardButton("⏭ Пропустить заметку", callback_data="skip_notes_generated")]]
         reply_markup = InlineKeyboardMarkup(keyboard)
 
         await update.message.reply_text(
-            f"✅ Username: *{escape_markdown_v2(username)}*\n\n📝 Send any *notes* \\(optional\\)\n\n_Or click Skip to save now_",
+            f"✅ Логин: *{escape_markdown_v2(username)}*\n\n📝 Отправьте *заметку* \\(необязательно\\)\n\n_Или нажмите «Пропустить», чтобы сохранить_",
             reply_markup=reply_markup,
             parse_mode=ParseMode.MARKDOWN_V2
         )
         return ASK_NOTES
     else:
-        keyboard = [[InlineKeyboardButton("⏭ Skip", callback_data="skip_password")]]
+        keyboard = [[InlineKeyboardButton("⏭ Пропустить", callback_data="skip_password")]]
         reply_markup = InlineKeyboardMarkup(keyboard)
         
         await update.message.reply_text(
-            f"✅ Username: *{escape_markdown_v2(username)}*\n\n🔐 Now send the *password* for this service",
+            f"✅ Логин: *{escape_markdown_v2(username)}*\n\n🔐 Отправьте *пароль* для этого сервиса",
             reply_markup=reply_markup,
             parse_mode=ParseMode.MARKDOWN_V2
         )
@@ -448,25 +469,25 @@ async def receive_password(update: Update, context: ContextTypes.DEFAULT_TYPE) -
     # Validate password
     if not password:
         await update.message.reply_text(
-            "❌ Password cannot be empty. Please provide a valid password.",
+            "❌ Пароль не может быть пустым\\.",
             parse_mode=ParseMode.MARKDOWN_V2
         )
         return ASK_PASSWORD
     
     if len(password) > 500:
         await update.message.reply_text(
-            "❌ Password is too long. Please keep it under 500 characters.",
+            "❌ Пароль слишком длинный\\. Допустимо до 500 символов\\.",
             parse_mode=ParseMode.MARKDOWN_V2
         )
         return ASK_PASSWORD
     
     context.user_data['password_to_save'] = password
     
-    keyboard = [[InlineKeyboardButton("⏭ Skip Notes", callback_data="skip_notes")]]
+    keyboard = [[InlineKeyboardButton("⏭ Пропустить заметку", callback_data="skip_notes")]]
     reply_markup = InlineKeyboardMarkup(keyboard)
     
     await update.message.reply_text(
-        "✅ Password received\n\n📝 Send any *notes* \\(optional\\)\n\n_Or click Skip to save now_",
+        "✅ Пароль получен\n\n📝 Отправьте *заметку* \\(необязательно\\)\n\n_Или нажмите «Пропустить», чтобы сохранить_",
         reply_markup=reply_markup,
         parse_mode=ParseMode.MARKDOWN_V2
     )
@@ -479,7 +500,7 @@ async def receive_notes_and_save(update: Update, context: ContextTypes.DEFAULT_T
     # Validate notes length
     if len(notes) > 1000:
         await update.message.reply_text(
-            "❌ Notes are too long. Please keep them under 1000 characters.",
+            "❌ Заметка слишком длинная\\. Допустимо до 1000 символов\\.",
             parse_mode=ParseMode.MARKDOWN_V2
         )
         return ASK_NOTES
@@ -494,23 +515,23 @@ async def receive_notes_and_save(update: Update, context: ContextTypes.DEFAULT_T
     
     if success:
         keyboard = [
-            [InlineKeyboardButton("🔑 View Manager", callback_data="password_manager")],
-            [InlineKeyboardButton("🔙 Main Menu", callback_data="back_to_main")]
+            [InlineKeyboardButton("🔑 Открыть менеджер", callback_data="password_manager")],
+            [InlineKeyboardButton("🔙 Главное меню", callback_data="back_to_main")]
         ]
         reply_markup = InlineKeyboardMarkup(keyboard)
         
         safe_service = escape_markdown_v2(service_name)
-        safe_username = escape_markdown_v2(username) if username else "_not provided_"
-        safe_notes = escape_markdown_v2(notes) if notes else "_none_"
+        safe_username = escape_markdown_v2(username) if username else "_не указан_"
+        safe_notes = escape_markdown_v2(notes) if notes else "_нет_"
 
         await update.message.reply_text(
-            f"✅ *Password Saved Successfully\\!*\n\n📦 Service: *{safe_service}*\n👤 Username: {safe_username}\n🔐 Password: {safe_monospace_password(password)}\n📝 Notes: {safe_notes}",
+            f"✅ *Пароль успешно сохранён\\!*\n\n📦 Сервис: *{safe_service}*\n👤 Логин: {safe_username}\n🔐 Пароль: {safe_monospace_password(password)}\n📝 Заметка: {safe_notes}",
             reply_markup=reply_markup,
             parse_mode=ParseMode.MARKDOWN_V2
         )
     else:
         await update.message.reply_text(
-            "❌ Error saving password\\. Please try again\\.",
+            "❌ Не удалось сохранить пароль\\. Повторите попытку\\.",
             parse_mode=ParseMode.MARKDOWN_V2
         )
     
@@ -524,21 +545,21 @@ async def cancel_add_password(update: Update, context: ContextTypes.DEFAULT_TYPE
     
     keyboard = [
         [
-            InlineKeyboardButton("⚡️ Fast", callback_data="fast"),
-            InlineKeyboardButton("👁 Detailed", callback_data="detailed")
+            InlineKeyboardButton("⚡️ Быстро", callback_data="fast"),
+            InlineKeyboardButton("👁 Гибко", callback_data="detailed")
         ],
         [
-            InlineKeyboardButton("📖 History", callback_data="history"),
-            InlineKeyboardButton("🔑 Password Manager", callback_data="password_manager")
+            InlineKeyboardButton("📖 История", callback_data="history"),
+            InlineKeyboardButton("🔑 Менеджер", callback_data="password_manager")
         ],
         [
-            InlineKeyboardButton("➕ Add Password", callback_data="add_password_start")
+            InlineKeyboardButton("➕ Добавить пароль", callback_data="add_password_start")
         ]
     ]
     
     reply_markup = InlineKeyboardMarkup(keyboard)
     
-    message_text = "❌ Cancelled\\.\n\n🔐 *Dox: Pass Gen*\n\nChoose your option:"
+    message_text = f"❌ Действие отменено\\.\n\n{MAIN_MENU_TEXT}"
     
     if update.callback_query:
         await update.callback_query.edit_message_text(
@@ -563,14 +584,14 @@ async def show_password_manager(query, user_id, page=1):
     
     if total_passwords == 0:
         keyboard = [
-            [InlineKeyboardButton("➕ Add Password", callback_data="add_password_start")],
-            [InlineKeyboardButton("🔙 Main Menu", callback_data="back_to_main")]
+            [InlineKeyboardButton("➕ Добавить пароль", callback_data="add_password_start")],
+            [InlineKeyboardButton("🔙 Главное меню", callback_data="back_to_main")]
         ]
         
         reply_markup = InlineKeyboardMarkup(keyboard)
         
         await query.edit_message_text(
-            text="🔑 *Password Manager*\n\n❌ No passwords saved yet\\.\n\nAdd passwords to keep them safe\\!",
+            text=f"🔑 *Менеджер паролей*\n\n❌ Сохранённых паролей пока нет\\.\n\nДобавьте первый пароль\\.\n\n{PRIVACY_NOTE}",
             reply_markup=reply_markup,
             parse_mode=ParseMode.MARKDOWN_V2
         )
@@ -587,7 +608,7 @@ async def show_password_manager(query, user_id, page=1):
     
     # Build text
     try:
-        manager_text = f"🔑 *Password Manager* \\(Page {page}/{total_pages}\\)\n\n"
+        manager_text = f"🔑 *Менеджер паролей* \\(Страница {page}/{total_pages}\\)\n\n"
         
         for pwd_id, service, username, password, notes, created_at in passwords:
             safe_password = safe_monospace_password(password)
@@ -599,7 +620,7 @@ async def show_password_manager(query, user_id, page=1):
                 manager_text += f"📝 _{escape_markdown_v2(notes)}_\n"
             manager_text += f"🗑 /delete\\_{pwd_id}\n\n"
         
-        manager_text += "_Tap password to copy_"
+        manager_text += "_Нажмите на пароль, чтобы скопировать_"
         
         # Create keyboard
         keyboard = []
@@ -608,15 +629,15 @@ async def show_password_manager(query, user_id, page=1):
         if total_pages > 1:
             nav_buttons = []
             if page > 1:
-                nav_buttons.append(InlineKeyboardButton("⬅️ Prev", callback_data=f"manager_page_{page-1}"))
+                nav_buttons.append(InlineKeyboardButton("⬅️ Назад", callback_data=f"manager_page_{page-1}"))
             if page < total_pages:
-                nav_buttons.append(InlineKeyboardButton("Next ➡️", callback_data=f"manager_page_{page+1}"))
+                nav_buttons.append(InlineKeyboardButton("Вперёд ➡️", callback_data=f"manager_page_{page+1}"))
             if nav_buttons:
                 keyboard.append(nav_buttons)
             keyboard.append([InlineKeyboardButton(f"📄 {page}/{total_pages}", callback_data="noop")])
         
-        keyboard.append([InlineKeyboardButton("➕ Add Password", callback_data="add_password_start")])
-        keyboard.append([InlineKeyboardButton("🔙 Main Menu", callback_data="back_to_main")])
+        keyboard.append([InlineKeyboardButton("➕ Добавить пароль", callback_data="add_password_start")])
+        keyboard.append([InlineKeyboardButton("🔙 Главное меню", callback_data="back_to_main")])
         
         reply_markup = InlineKeyboardMarkup(keyboard)
         
@@ -629,7 +650,7 @@ async def show_password_manager(query, user_id, page=1):
     except Exception as e:
         logger.error(f"Error showing password manager: {e}")
         # Fallback without markdown
-        simple_text = f"🔑 Password Manager (Page {page}/{total_pages})\n\n"
+        simple_text = f"🔑 Менеджер паролей (Страница {page}/{total_pages})\n\n"
         
         for pwd_id, service, username, password, notes, created_at in passwords:
             simple_text += f"📦 {service}\n"
@@ -644,14 +665,14 @@ async def show_password_manager(query, user_id, page=1):
         if total_pages > 1:
             nav_buttons = []
             if page > 1:
-                nav_buttons.append(InlineKeyboardButton("⬅️ Prev", callback_data=f"manager_page_{page-1}"))
+                nav_buttons.append(InlineKeyboardButton("⬅️ Назад", callback_data=f"manager_page_{page-1}"))
             if page < total_pages:
-                nav_buttons.append(InlineKeyboardButton("Next ➡️", callback_data=f"manager_page_{page+1}"))
+                nav_buttons.append(InlineKeyboardButton("Вперёд ➡️", callback_data=f"manager_page_{page+1}"))
             if nav_buttons:
                 keyboard.append(nav_buttons)
         
-        keyboard.append([InlineKeyboardButton("➕ Add Password", callback_data="add_password_start")])
-        keyboard.append([InlineKeyboardButton("🔙 Main Menu", callback_data="back_to_main")])
+        keyboard.append([InlineKeyboardButton("➕ Добавить пароль", callback_data="add_password_start")])
+        keyboard.append([InlineKeyboardButton("🔙 Главное меню", callback_data="back_to_main")])
         
         reply_markup = InlineKeyboardMarkup(keyboard)
         
@@ -664,28 +685,21 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """Send start message with inline keyboard"""
     keyboard = [
         [
-            InlineKeyboardButton("⚡️ Fast", callback_data="fast"),
-            InlineKeyboardButton("👁 Detailed", callback_data="detailed")
+            InlineKeyboardButton("⚡️ Быстро", callback_data="fast"),
+            InlineKeyboardButton("👁 Гибко", callback_data="detailed")
         ],
         [
-            InlineKeyboardButton("📖 History", callback_data="history"),
-            InlineKeyboardButton("🔑 Password Manager", callback_data="password_manager")
+            InlineKeyboardButton("📖 История", callback_data="history"),
+            InlineKeyboardButton("🔑 Менеджер", callback_data="password_manager")
         ],
         [
-            InlineKeyboardButton("➕ Add Password", callback_data="add_password_start")
+            InlineKeyboardButton("➕ Добавить пароль", callback_data="add_password_start")
         ]
     ]
     
     reply_markup = InlineKeyboardMarkup(keyboard)
     
-    message_text = """🔐 *Dox: Pass Gen*
-
-1\\. Fast password generation
-2\\. Detailed password generation
-3\\. Password history
-4\\. Password Manager \\- save and manage your passwords
-
-Choose your option:"""
+    message_text = MAIN_MENU_TEXT
     
     await update.message.reply_text(
         message_text, 
@@ -707,7 +721,7 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
             password = password_gen.generate_fast()
             
             # Save to history (memory)
-            save_password_to_history(user_id, password, "Fast")
+            save_password_to_history(user_id, password, "Быстрый")
             
             # Save to database
             user = query.from_user
@@ -717,7 +731,7 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
                 first_name=user.first_name,
                 last_name=user.last_name,
                 password=password,
-                generation_type="Fast"
+                generation_type="Быстрый"
             )
             
             # Store password in context for saving to manager
@@ -729,25 +743,29 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
             # Create keyboard with main menu buttons and Save to Manager option
             keyboard = [
                 [
-                    InlineKeyboardButton("💾 Save to Manager", callback_data="save_to_manager")
+                    InlineKeyboardButton("💾 Сохранить в менеджер", callback_data="save_to_manager")
                 ],
                 [
-                    InlineKeyboardButton("⚡️ Fast", callback_data="fast"),
-                    InlineKeyboardButton("👁 Detailed", callback_data="detailed")
+                    InlineKeyboardButton("⚡️ Быстро", callback_data="fast"),
+                    InlineKeyboardButton("👁 Гибко", callback_data="detailed")
                 ],
                 [
-                    InlineKeyboardButton("📖 History", callback_data="history"),
-                    InlineKeyboardButton("🔑 Manager", callback_data="password_manager")
+                    InlineKeyboardButton("📖 История", callback_data="history"),
+                    InlineKeyboardButton("🔑 Менеджер", callback_data="password_manager")
                 ],
                 [
-                    InlineKeyboardButton("🔙 Main Menu", callback_data="back_to_main")
+                    InlineKeyboardButton("🔙 Главное меню", callback_data="back_to_main")
                 ]
             ]
             
             reply_markup = InlineKeyboardMarkup(keyboard)
             
             await query.edit_message_text(
-                text=f"🔐 *Your fast password:*\n\n{password_text}\n\n_Tap to copy_\n\n💡 _You can save this password to Manager_",
+                text=(
+                    f"🔐 *Ваш пароль:*\n\n{password_text}\n\n"
+                    "_Нажмите, чтобы скопировать_\n\n"
+                    "💡 _Вы можете сохранить пароль в менеджер_"
+                ),
                 reply_markup=reply_markup,
                 parse_mode=ParseMode.MARKDOWN_V2
             )
@@ -816,11 +834,11 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
         
         elif query.data == "add_password_start":
             # Start adding password manually
-            keyboard = [[InlineKeyboardButton("❌ Cancel", callback_data="cancel_add_password")]]
+            keyboard = [[InlineKeyboardButton("❌ Отмена", callback_data="cancel_add_password")]]
             reply_markup = InlineKeyboardMarkup(keyboard)
             
             await query.edit_message_text(
-                "💾 *Add Password to Manager*\n\n📝 Please send the *service name* \\(e\\.g\\., Gmail, Facebook, Instagram\\)",
+                "💾 *Добавление пароля*\n\n📝 Отправьте *название сервиса* \\(например: Gmail, Instagram, Steam\\)",
                 reply_markup=reply_markup,
                 parse_mode=ParseMode.MARKDOWN_V2
             )
@@ -837,21 +855,21 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
             context.user_data['username'] = ""
             
             if context.user_data.get('is_saving_generated'):
-                keyboard = [[InlineKeyboardButton("⏭ Skip Notes", callback_data="skip_notes_generated")]]
+                keyboard = [[InlineKeyboardButton("⏭ Пропустить заметку", callback_data="skip_notes_generated")]]
                 reply_markup = InlineKeyboardMarkup(keyboard)
                 
                 await query.edit_message_text(
-                    "📝 Send any *notes* \\(optional\\)\n\n_Or click Skip to save now_",
+                    "📝 Отправьте *заметку* \\(необязательно\\)\n\n_Или нажмите «Пропустить», чтобы сохранить_",
                     reply_markup=reply_markup,
                     parse_mode=ParseMode.MARKDOWN_V2
                 )
                 context.user_data['conv_state'] = ASK_NOTES
             else:
-                keyboard = [[InlineKeyboardButton("⏭ Skip", callback_data="skip_password")]]
+                keyboard = [[InlineKeyboardButton("⏭ Пропустить", callback_data="skip_password")]]
                 reply_markup = InlineKeyboardMarkup(keyboard)
                 
                 await query.edit_message_text(
-                    "🔐 Now send the *password* for this service",
+                    "🔐 Отправьте *пароль* для этого сервиса",
                     reply_markup=reply_markup,
                     parse_mode=ParseMode.MARKDOWN_V2
                 )
@@ -867,7 +885,7 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
 
             if not service_name or not password:
                 await query.edit_message_text(
-                    "❌ Missing service or password\\. Please start over\\.",
+                    "❌ Не хватает названия сервиса или пароля\\. Начните заново\\.",
                     parse_mode=ParseMode.MARKDOWN_V2
                 )
                 context.user_data.clear()
@@ -877,22 +895,22 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
             
             if success:
                 keyboard = [
-                    [InlineKeyboardButton("🔑 View Manager", callback_data="password_manager")],
-                    [InlineKeyboardButton("🔙 Main Menu", callback_data="back_to_main")]
+                    [InlineKeyboardButton("🔑 Открыть менеджер", callback_data="password_manager")],
+                    [InlineKeyboardButton("🔙 Главное меню", callback_data="back_to_main")]
                 ]
                 reply_markup = InlineKeyboardMarkup(keyboard)
                 
                 safe_service = escape_markdown_v2(service_name)
-                safe_username = escape_markdown_v2(username) if username else '_not provided_'
+                safe_username = escape_markdown_v2(username) if username else '_не указан_'
                 
                 await query.edit_message_text(
-                    f"✅ *Password Saved Successfully\\!*\n\n📦 Service: *{safe_service}*\n👤 Username: {safe_username}\n🔐 Password: {safe_monospace_password(password)}",
+                    f"✅ *Пароль успешно сохранён\\!*\n\n📦 Сервис: *{safe_service}*\n👤 Логин: {safe_username}\n🔐 Пароль: {safe_monospace_password(password)}",
                     reply_markup=reply_markup,
                     parse_mode=ParseMode.MARKDOWN_V2
                 )
             else:
                 await query.edit_message_text(
-                    "❌ Error saving password\\. Please try again\\.",
+                    "❌ Не удалось сохранить пароль\\. Повторите попытку\\.",
                     parse_mode=ParseMode.MARKDOWN_V2
                 )
             
@@ -923,34 +941,36 @@ async def show_detailed_options(query, user_id):
     # Create keyboard with current settings
     keyboard = [
         [InlineKeyboardButton(
-            f"{'✅' if settings['lowercase'] else '❌'} Lowercase (a-z)", 
+            f"{'✅' if settings['lowercase'] else '❌'} Строчные (a-z)", 
             callback_data="toggle_lowercase"
         )],
         [InlineKeyboardButton(
-            f"{'✅' if settings['uppercase'] else '❌'} Uppercase (A-Z)", 
+            f"{'✅' if settings['uppercase'] else '❌'} Заглавные (A-Z)", 
             callback_data="toggle_uppercase"
         )],
         [InlineKeyboardButton(
-            f"{'✅' if settings['digits'] else '❌'} Digits (0-9)", 
+            f"{'✅' if settings['digits'] else '❌'} Цифры (0-9)", 
             callback_data="toggle_digits"
         )],
         [InlineKeyboardButton(
-            f"{'✅' if settings['symbols'] else '❌'} Symbols (!@#$...)", 
+            f"{'✅' if settings['symbols'] else '❌'} Символы (!@#$...)", 
             callback_data="toggle_symbols"
         )],
         [InlineKeyboardButton(
-            f"📏 Length: {settings['length']}", 
+            f"📏 Длина: {settings['length']}", 
             callback_data="length_menu"
         )],
-        [InlineKeyboardButton("🔐 Generate Password", callback_data="generate_custom")],
-        [InlineKeyboardButton("🔙 Back", callback_data="back_to_main")]
+        [InlineKeyboardButton("🔐 Сгенерировать", callback_data="generate_custom")],
+        [InlineKeyboardButton("🔙 Назад", callback_data="back_to_main")]
     ]
     
     reply_markup = InlineKeyboardMarkup(keyboard)
     
-    message_text = """🔧 *Detailed Password Settings*
-
-Configure your password options:"""
+    message_text = (
+        "🔧 *Гибкая генерация*\n\n"
+        "*Настройте параметры пароля*:\n"
+        "> Выберите нужные типы символов и длину\\."
+    )
     
     try:
         await query.edit_message_text(
@@ -962,7 +982,7 @@ Configure your password options:"""
     except Exception as e:
         logger.error(f"Error showing detailed options: {e}")
         # Fallback without markdown
-        simple_text = "🔧 Detailed Password Settings\n\nConfigure your password options:"
+        simple_text = "🔧 Гибкая генерация\n\nНастройте параметры пароля."
         await query.edit_message_text(
             text=simple_text,
             reply_markup=reply_markup
@@ -984,7 +1004,7 @@ async def handle_toggle(query, user_id):
             }
 
         if toggle_type not in {"lowercase", "uppercase", "digits", "symbols"}:
-            await query.answer("Invalid setting selected.")
+            await query.answer("Выбран неизвестный параметр.")
             return
 
         # Toggle the setting
@@ -1013,13 +1033,13 @@ async def handle_length_selection(query, user_id):
                 InlineKeyboardButton("24", callback_data="length_24"),
                 InlineKeyboardButton("32", callback_data="length_32")
             ],
-            [InlineKeyboardButton("🔙 Back", callback_data="detailed")]
+            [InlineKeyboardButton("🔙 Назад", callback_data="detailed")]
         ]
         
         reply_markup = InlineKeyboardMarkup(keyboard)
         
         await query.edit_message_text(
-            text="📏 *Select Password Length*",
+            text="📏 *Выберите длину пароля*",
             reply_markup=reply_markup,
             parse_mode=ParseMode.MARKDOWN_V2
         )
@@ -1054,7 +1074,7 @@ async def generate_custom_password(query, user_id, context: ContextTypes.DEFAULT
     )
     
     # Save to history (memory)
-    save_password_to_history(user_id, password, "Custom")
+    save_password_to_history(user_id, password, "Гибкий")
     
     # Save to database
     user = query.from_user
@@ -1064,7 +1084,7 @@ async def generate_custom_password(query, user_id, context: ContextTypes.DEFAULT
         first_name=user.first_name,
         last_name=user.last_name,
         password=password,
-        generation_type="Custom"
+        generation_type="Гибкий"
     )
     
     # Store password in context for saving to manager
@@ -1075,10 +1095,10 @@ async def generate_custom_password(query, user_id, context: ContextTypes.DEFAULT
     
     # Create keyboard with options
     keyboard = [
-        [InlineKeyboardButton("💾 Save to Manager", callback_data="save_to_manager")],
-        [InlineKeyboardButton("🔄 Generate Another", callback_data="generate_custom")],
-        [InlineKeyboardButton("⚙️ Change Settings", callback_data="detailed")],
-        [InlineKeyboardButton("🔙 Main Menu", callback_data="back_to_main")]
+        [InlineKeyboardButton("💾 Сохранить в менеджер", callback_data="save_to_manager")],
+        [InlineKeyboardButton("🔄 Сгенерировать ещё", callback_data="generate_custom")],
+        [InlineKeyboardButton("⚙️ Изменить параметры", callback_data="detailed")],
+        [InlineKeyboardButton("🔙 Главное меню", callback_data="back_to_main")]
     ]
     
     reply_markup = InlineKeyboardMarkup(keyboard)
@@ -1086,24 +1106,24 @@ async def generate_custom_password(query, user_id, context: ContextTypes.DEFAULT
     # Create settings summary
     enabled_features = []
     if settings['lowercase']:
-        enabled_features.append("lowercase")
+        enabled_features.append("строчные")
     if settings['uppercase']:
-        enabled_features.append("UPPERCASE")
+        enabled_features.append("ЗАГЛАВНЫЕ")
     if settings['digits']:
         enabled_features.append("123")
     if settings['symbols']:
-        enabled_features.append("!@#")
+        enabled_features.append("символы")
     
     features_text = " \\+ ".join(enabled_features)
     
-    message_text = f"""🔐 *Your custom password:*
+    message_text = f"""🔐 *Ваш пароль:*
 
 {password_text}
 
-📊 *Settings:* {features_text}
-📏 *Length:* {settings['length']}
+📊 *Параметры:* {features_text}
+📏 *Длина:* {settings['length']}
 
-_Tap the password to copy_"""
+_Нажмите на пароль, чтобы скопировать_"""
     
     try:
         await query.edit_message_text(
@@ -1128,14 +1148,14 @@ _Tap the password to copy_"""
             
             escaped_features_text = " \\+ ".join(escaped_features)
             
-            fallback_text = f"""🔐 *Your custom password:*
+            fallback_text = f"""🔐 *Ваш пароль:*
 
 {safe_monospace_password(password)}
 
-📊 *Settings:* {escaped_features_text}
-📏 *Length:* {settings['length']}
+📊 *Параметры:* {escaped_features_text}
+📏 *Длина:* {settings['length']}
 
-_Tap the password to copy_"""
+_Нажмите на пароль, чтобы скопировать_"""
             
             await query.edit_message_text(
                 text=fallback_text,
@@ -1146,7 +1166,7 @@ _Tap the password to copy_"""
             logger.error(f"Error in fallback: {e2}")
             # Final fallback - try with just monospace password
             try:
-                simple_text = f"🔐 Your custom password:\n\n{password}\n\nLength: {settings['length']}\n\nTap the password to copy"
+                simple_text = f"🔐 Ваш пароль:\n\n{password}\n\nДлина: {settings['length']}\n\nНажмите на пароль, чтобы скопировать"
                 await query.edit_message_text(
                     text=simple_text,
                     reply_markup=reply_markup
@@ -1154,7 +1174,7 @@ _Tap the password to copy_"""
             except Exception as e3:
                 logger.error(f"Error in final fallback: {e3}")
                 # Last resort - plain text
-                plain_text = f"🔐 Your custom password:\n\n{password}\n\nLength: {settings['length']}\n\nTap the password to copy"
+                plain_text = f"🔐 Ваш пароль:\n\n{password}\n\nДлина: {settings['length']}\n\nНажмите на пароль, чтобы скопировать"
                 await query.edit_message_text(
                     text=plain_text,
                     reply_markup=reply_markup
@@ -1164,28 +1184,21 @@ async def start_from_callback(query):
     """Start command from callback query"""
     keyboard = [
         [
-            InlineKeyboardButton("⚡️ Fast", callback_data="fast"),
-            InlineKeyboardButton("👁 Detailed", callback_data="detailed")
+            InlineKeyboardButton("⚡️ Быстро", callback_data="fast"),
+            InlineKeyboardButton("👁 Гибко", callback_data="detailed")
         ],
         [
-            InlineKeyboardButton("📖 History", callback_data="history"),
-            InlineKeyboardButton("🔑 Password Manager", callback_data="password_manager")
+            InlineKeyboardButton("📖 История", callback_data="history"),
+            InlineKeyboardButton("🔑 Менеджер", callback_data="password_manager")
         ],
         [
-            InlineKeyboardButton("➕ Add Password", callback_data="add_password_start")
+            InlineKeyboardButton("➕ Добавить пароль", callback_data="add_password_start")
         ]
     ]
     
     reply_markup = InlineKeyboardMarkup(keyboard)
     
-    message_text = """🔐 *Dox: Pass Gen*
-
-1\\. Fast password generation
-2\\. Detailed password generation
-3\\. Password history
-4\\. Password Manager \\- save and manage your passwords
-
-Choose your option:"""
+    message_text = MAIN_MENU_TEXT
     
     await query.edit_message_text(
         text=message_text, 
@@ -1225,13 +1238,13 @@ async def show_password_history_page(query, user_id, page=1):
         # No history
         logger.info(f"No history found for user {user_id}")
         keyboard = [
-            [InlineKeyboardButton("🔙 Main Menu", callback_data="back_to_main")]
+            [InlineKeyboardButton("🔙 Главное меню", callback_data="back_to_main")]
         ]
         
         reply_markup = InlineKeyboardMarkup(keyboard)
         
         await query.edit_message_text(
-            text="📖 *Password History*\n\n❌ No passwords generated yet\\.\n\nStart generating passwords to see them here\\!",
+            text=f"📖 *История паролей*\n\n❌ Паролей пока нет\\.\n\nСгенерируйте первый пароль\\.\n\n{PRIVACY_NOTE}",
             reply_markup=reply_markup,
             parse_mode=ParseMode.MARKDOWN_V2
         )
@@ -1252,7 +1265,7 @@ async def show_password_history_page(query, user_id, page=1):
     
     # Build history text
     try:
-        history_text = f"📖 *Password History* \\(Page {page}/{total_pages}\\)\n\n"
+        history_text = f"📖 *История паролей* \\(Страница {page}/{total_pages}\\)\n\n"
         
         for i, (password, generation_type, created_at) in enumerate(passwords, offset + 1):
             # Format the datetime
@@ -1269,7 +1282,7 @@ async def show_password_history_page(query, user_id, page=1):
             history_text += f"{i}\\. {safe_password}\n"
             history_text += f"   📅 {escape_markdown_v2(formatted_date)} \\| 🔧 {escape_markdown_v2(generation_type)}\n\n"
         
-        history_text += "_Tap any password to copy_"
+        history_text += "_Нажмите на пароль, чтобы скопировать_"
         
         # Create pagination keyboard
         keyboard = []
@@ -1278,9 +1291,9 @@ async def show_password_history_page(query, user_id, page=1):
         if total_pages > 1:
             nav_buttons = []
             if page > 1:
-                nav_buttons.append(InlineKeyboardButton("⬅️ Prev", callback_data=f"history_page_{page-1}"))
+                nav_buttons.append(InlineKeyboardButton("⬅️ Назад", callback_data=f"history_page_{page-1}"))
             if page < total_pages:
-                nav_buttons.append(InlineKeyboardButton("Next ➡️", callback_data=f"history_page_{page+1}"))
+                nav_buttons.append(InlineKeyboardButton("Вперёд ➡️", callback_data=f"history_page_{page+1}"))
             
             if nav_buttons:
                 keyboard.append(nav_buttons)
@@ -1289,8 +1302,8 @@ async def show_password_history_page(query, user_id, page=1):
             keyboard.append([InlineKeyboardButton(f"📄 {page}/{total_pages}", callback_data="noop")])
         
         # Action buttons
-        keyboard.append([InlineKeyboardButton("🗑 Clear History", callback_data="clear_history")])
-        keyboard.append([InlineKeyboardButton("🔙 Main Menu", callback_data="back_to_main")])
+        keyboard.append([InlineKeyboardButton("🗑 Очистить историю", callback_data="clear_history")])
+        keyboard.append([InlineKeyboardButton("🔙 Главное меню", callback_data="back_to_main")])
         
         reply_markup = InlineKeyboardMarkup(keyboard)
         
@@ -1304,7 +1317,7 @@ async def show_password_history_page(query, user_id, page=1):
         logger.error(f"Error showing history page {page}: {e}")
         # Fallback - try with simpler formatting
         try:
-            simple_history = f"📖 Password History (Page {page}/{total_pages})\n\n"
+            simple_history = f"📖 История паролей (Страница {page}/{total_pages})\n\n"
             for i, (password, generation_type, created_at) in enumerate(passwords, offset + 1):
                 try:
                     dt = datetime.fromisoformat(created_at.replace('Z', '+00:00'))
@@ -1316,21 +1329,21 @@ async def show_password_history_page(query, user_id, page=1):
                 simple_history += f"{i}. {password}\n"
                 simple_history += f"   📅 {formatted_date} | 🔧 {generation_type}\n\n"
             
-            simple_history += "Tap any password to copy"
+            simple_history += "Нажмите на пароль, чтобы скопировать"
             
             # Simple keyboard
             keyboard = []
             if total_pages > 1:
                 nav_buttons = []
                 if page > 1:
-                    nav_buttons.append(InlineKeyboardButton("⬅️ Prev", callback_data=f"history_page_{page-1}"))
+                    nav_buttons.append(InlineKeyboardButton("⬅️ Назад", callback_data=f"history_page_{page-1}"))
                 if page < total_pages:
-                    nav_buttons.append(InlineKeyboardButton("Next ➡️", callback_data=f"history_page_{page+1}"))
+                    nav_buttons.append(InlineKeyboardButton("Вперёд ➡️", callback_data=f"history_page_{page+1}"))
                 if nav_buttons:
                     keyboard.append(nav_buttons)
             
-            keyboard.append([InlineKeyboardButton("🗑 Clear History", callback_data="clear_history")])
-            keyboard.append([InlineKeyboardButton("🔙 Main Menu", callback_data="back_to_main")])
+            keyboard.append([InlineKeyboardButton("🗑 Очистить историю", callback_data="clear_history")])
+            keyboard.append([InlineKeyboardButton("🔙 Главное меню", callback_data="back_to_main")])
             
             reply_markup = InlineKeyboardMarkup(keyboard)
             
@@ -1342,7 +1355,7 @@ async def show_password_history_page(query, user_id, page=1):
         except Exception as e2:
             logger.error(f"Error in history fallback: {e2}")
             # Final fallback without markdown
-            plain_history = f"📖 Password History (Page {page}/{total_pages})\n\n"
+            plain_history = f"📖 История паролей (Страница {page}/{total_pages})\n\n"
             for i, (password, generation_type, created_at) in enumerate(passwords, offset + 1):
                 try:
                     dt = datetime.fromisoformat(created_at.replace('Z', '+00:00'))
@@ -1358,14 +1371,14 @@ async def show_password_history_page(query, user_id, page=1):
             if total_pages > 1:
                 nav_buttons = []
                 if page > 1:
-                    nav_buttons.append(InlineKeyboardButton("⬅️ Prev", callback_data=f"history_page_{page-1}"))
+                    nav_buttons.append(InlineKeyboardButton("⬅️ Назад", callback_data=f"history_page_{page-1}"))
                 if page < total_pages:
-                    nav_buttons.append(InlineKeyboardButton("Next ➡️", callback_data=f"history_page_{page+1}"))
+                    nav_buttons.append(InlineKeyboardButton("Вперёд ➡️", callback_data=f"history_page_{page+1}"))
                 if nav_buttons:
                     keyboard.append(nav_buttons)
             
-            keyboard.append([InlineKeyboardButton("🗑 Clear History", callback_data="clear_history")])
-            keyboard.append([InlineKeyboardButton("🔙 Main Menu", callback_data="back_to_main")])
+            keyboard.append([InlineKeyboardButton("🗑 Очистить историю", callback_data="clear_history")])
+            keyboard.append([InlineKeyboardButton("🔙 Главное меню", callback_data="back_to_main")])
             
             reply_markup = InlineKeyboardMarkup(keyboard)
             
@@ -1384,62 +1397,43 @@ async def clear_password_history(query, user_id):
     await clear_user_passwords_from_db(user_id)
     
     keyboard = [
-        [InlineKeyboardButton("🔙 Main Menu", callback_data="back_to_main")]
+        [InlineKeyboardButton("🔙 Главное меню", callback_data="back_to_main")]
     ]
     
     reply_markup = InlineKeyboardMarkup(keyboard)
     
     await query.edit_message_text(
-        text="📖 *Password History*\n\n✅ History cleared successfully\\!\n\nAll your saved passwords have been removed\\.",
+        text="📖 *История паролей*\n\n✅ История успешно очищена\\.\n\nВсе записи удалены\\.",
         reply_markup=reply_markup,
         parse_mode=ParseMode.MARKDOWN_V2
     )
 
 async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """Send help message"""
-    help_text = """🔐 *Dox: Pass Gen Help*
+    help_text = f"""🔐 *Справка Dox: Pass Gen*
 
-*Commands:*
-• /start \\- Start the bot
-• /help \\- Show this help message
-• /debug \\- Show debug information
-• /stats \\- Show global statistics
-• /delete\\_<id> \\- Delete password from Manager
+*Команды:*
+• /start \\- открыть главное меню
+• /help \\- показать справку
+• /debug \\- отладочная информация
+• /stats \\- общая статистика
+• /delete\\_<id> \\- удалить пароль из менеджера
 
-*Features:*
-• ⚡️ *Fast Generation* \\- Instantly generate a secure password
-• 👁 *Detailed Generation* \\- Customize your password settings
-• 📖 *History* \\- View all previously generated passwords
-• 🔑 *Password Manager* \\- Save and manage your passwords
-• ➕ *Add Password* \\- Manually add passwords to Manager
-• 💾 *Database Storage* \\- All passwords saved permanently
+*Возможности:*
+• ⚡️ *Быстро* \\- мгновенная генерация надёжного пароля
+• 👁 *Гибко* \\- ручная настройка состава и длины
+• 📖 *История* \\- просмотр ранее сгенерированных паролей
+• 🔑 *Менеджер* \\- сохранение и управление паролями
+• ➕ *Добавить пароль* \\- ручное добавление записи
 
-*How to use:*
-1\\. Use /start to begin
-2\\. Choose Fast for instant password or Detailed for custom options
-3\\. Tap on generated password to copy it
-4\\. Save generated passwords to Manager with "Save to Manager" button
-5\\. Add your own passwords manually with "Add Password"
-6\\. View all saved passwords in Password Manager
+*Как пользоваться:*
+1\\. Откройте /start
+2\\. Выберите режим генерации
+3\\. Нажмите на пароль, чтобы скопировать
+4\\. Сохраните пароль в менеджер при необходимости
 
-*Password Manager Features:*
-• Save generated passwords with service name
-• Add passwords manually from any source
-• Store username/email for each password
-• Add optional notes for each entry
-• View all passwords with pagination
-• Delete passwords with /delete\\_<id> command
-• All data encrypted and secure
-
-*History Features:*
-• Stores ALL generated passwords permanently
-• Shows password type \\(Fast/Custom\\)
-• Pagination \\- 10 passwords per page
-• Clear history option available
-• Includes username and timestamp
-
-*Security:*
-Passwords are generated locally\\. All data stored in secure database\\."""
+{PRIVACY_NOTE}
+"""
     
     await update.message.reply_text(
         help_text,
@@ -1459,20 +1453,20 @@ async def debug_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
     history_count_db = await get_user_password_count(user_id)
     recent_passwords = await get_user_passwords_from_db(user_id, limit=5)
     
-    debug_text = f"""🔍 Debug Info:
+    debug_text = f"""🔍 Отладочная информация:
 
-👤 User Info:
+👤 Пользователь:
 • ID: {user_id}
-• Username: @{user.username or 'None'}
-• Name: {user.first_name or ''} {user.last_name or ''}
+• Логин: @{user.username or 'нет'}
+• Имя: {user.first_name or ''} {user.last_name or ''}
 
-📊 Password Stats:
-• In memory: {history_count_memory}
-• In database: {history_count_db}
+📊 Статистика:
+• В памяти: {history_count_memory}
+• В базе: {history_count_db}
 
-⚙️ Settings: {settings}
+⚙️ Параметры: {settings}
 
-🔐 Recent passwords (DB):"""
+🔐 Последние пароли (БД):"""
     
     for i, (password, gen_type, created_at) in enumerate(recent_passwords[:3], 1):
         debug_text += f"\n{i}. {password} ({gen_type}) - {created_at}"
@@ -1483,12 +1477,12 @@ async def stats_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
     """Show global statistics"""
     stats = await get_all_passwords_stats()
     
-    stats_text = f"""📊 *Global Statistics*
+    stats_text = f"""📊 *Глобальная статистика*
 
-🔐 Total passwords generated: {stats['total_passwords']}
-👥 Unique users: {stats['unique_users']}
+🔐 Всего сгенерировано: {stats['total_passwords']}
+👥 Уникальных пользователей: {stats['unique_users']}
 
-📈 By generation type:"""
+📈 По типам генерации:"""
     
     for _, _, gen_type, count in stats['by_type']:
         stats_text += f"\n• {gen_type}: {count}"
@@ -1500,20 +1494,20 @@ async def admin_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
     user_id = update.effective_user.id
     
     if user_id not in ADMIN_IDS:
-        await update.message.reply_text("❌ Access denied. This command is for administrators only.")
+        await update.message.reply_text("❌ Доступ запрещён. Команда доступна только администраторам.")
         return
     
     # Create inline keyboard for admin functions
     keyboard = [
-        [InlineKeyboardButton("📖 View All Passwords", callback_data="admin_all_page_1")],
-        [InlineKeyboardButton("📊 Detailed Stats", callback_data="admin_stats")],
-        [InlineKeyboardButton("📋 Export Data", callback_data="admin_export")]
+        [InlineKeyboardButton("📖 Все пароли", callback_data="admin_all_page_1")],
+        [InlineKeyboardButton("📊 Подробная статистика", callback_data="admin_stats")],
+        [InlineKeyboardButton("📋 Экспорт", callback_data="admin_export")]
     ]
     
     reply_markup = InlineKeyboardMarkup(keyboard)
     
     await update.message.reply_text(
-        "🔧 *Admin Panel*\n\nChoose an option:",
+        "🔧 *Панель администратора*\n\nВыберите действие:",
         reply_markup=reply_markup,
         parse_mode=ParseMode.MARKDOWN_V2
     )
@@ -1522,7 +1516,7 @@ async def show_all_passwords_page(query, admin_user_id, page=1):
     """Show all passwords with pagination (admin only)"""
     # Verify admin access
     if admin_user_id not in ADMIN_IDS:
-        await query.answer("❌ Access denied")
+        await query.answer("❌ Доступ запрещён")
         return
     
     logger.info(f"Admin {admin_user_id} viewing all passwords page {page}")
@@ -1532,7 +1526,7 @@ async def show_all_passwords_page(query, admin_user_id, page=1):
     
     if total_passwords == 0:
         await query.edit_message_text(
-            text="📖 *All Passwords*\n\n❌ No passwords in database yet\\.",
+            text="📖 *Все пароли*\n\n❌ В базе пока нет записей\\.",
             parse_mode=ParseMode.MARKDOWN_V2
         )
         return
@@ -1552,7 +1546,7 @@ async def show_all_passwords_page(query, admin_user_id, page=1):
     
     # Build history text
     try:
-        history_text = f"📖 *All Passwords* \\(Page {page}/{total_pages}\\)\n\n"
+        history_text = f"📖 *Все пароли* \\(Страница {page}/{total_pages}\\)\n\n"
         
         for i, (user_id, username, first_name, last_name, password, generation_type, created_at) in enumerate(passwords, offset + 1):
             # Format the datetime
@@ -1572,7 +1566,7 @@ async def show_all_passwords_page(query, admin_user_id, page=1):
             history_text += f"{i}\\. {safe_password}\n"
             history_text += f"   👤 {escape_markdown_v2(user_info)} \\| 📅 {escape_markdown_v2(formatted_date)} \\| 🔧 {escape_markdown_v2(generation_type)}\n\n"
         
-        history_text += "_Tap any password to copy_"
+        history_text += "_Нажмите на пароль, чтобы скопировать_"
         
         # Create pagination keyboard
         keyboard = []
@@ -1581,9 +1575,9 @@ async def show_all_passwords_page(query, admin_user_id, page=1):
         if total_pages > 1:
             nav_buttons = []
             if page > 1:
-                nav_buttons.append(InlineKeyboardButton("⬅️ Prev", callback_data=f"admin_all_page_{page-1}"))
+                nav_buttons.append(InlineKeyboardButton("⬅️ Назад", callback_data=f"admin_all_page_{page-1}"))
             if page < total_pages:
-                nav_buttons.append(InlineKeyboardButton("Next ➡️", callback_data=f"admin_all_page_{page+1}"))
+                nav_buttons.append(InlineKeyboardButton("Вперёд ➡️", callback_data=f"admin_all_page_{page+1}"))
             
             if nav_buttons:
                 keyboard.append(nav_buttons)
@@ -1592,7 +1586,7 @@ async def show_all_passwords_page(query, admin_user_id, page=1):
             keyboard.append([InlineKeyboardButton(f"📄 {page}/{total_pages}", callback_data="noop")])
         
         # Back button
-        keyboard.append([InlineKeyboardButton("🔙 Admin Panel", callback_data="admin_menu")])
+        keyboard.append([InlineKeyboardButton("🔙 Панель администратора", callback_data="admin_menu")])
         
         reply_markup = InlineKeyboardMarkup(keyboard)
         
@@ -1606,7 +1600,7 @@ async def show_all_passwords_page(query, admin_user_id, page=1):
         logger.error(f"Error showing all passwords page {page}: {e}")
         # Fallback without markdown
         try:
-            simple_history = f"📖 All Passwords (Page {page}/{total_pages})\n\n"
+            simple_history = f"📖 Все пароли (Страница {page}/{total_pages})\n\n"
             for i, (user_id, username, first_name, last_name, password, generation_type, created_at) in enumerate(passwords, offset + 1):
                 try:
                     dt = datetime.fromisoformat(created_at.replace('Z', '+00:00'))
@@ -1625,13 +1619,13 @@ async def show_all_passwords_page(query, admin_user_id, page=1):
             if total_pages > 1:
                 nav_buttons = []
                 if page > 1:
-                    nav_buttons.append(InlineKeyboardButton("⬅️ Prev", callback_data=f"admin_all_page_{page-1}"))
+                    nav_buttons.append(InlineKeyboardButton("⬅️ Назад", callback_data=f"admin_all_page_{page-1}"))
                 if page < total_pages:
-                    nav_buttons.append(InlineKeyboardButton("Next ➡️", callback_data=f"admin_all_page_{page+1}"))
+                    nav_buttons.append(InlineKeyboardButton("Вперёд ➡️", callback_data=f"admin_all_page_{page+1}"))
                 if nav_buttons:
                     keyboard.append(nav_buttons)
             
-            keyboard.append([InlineKeyboardButton("🔙 Admin Panel", callback_data="admin_menu")])
+            keyboard.append([InlineKeyboardButton("🔙 Панель администратора", callback_data="admin_menu")])
             reply_markup = InlineKeyboardMarkup(keyboard)
             
             await query.edit_message_text(
@@ -1641,26 +1635,26 @@ async def show_all_passwords_page(query, admin_user_id, page=1):
             
         except Exception as e2:
             logger.error(f"Error in admin fallback: {e2}")
-            await query.edit_message_text("❌ Error displaying passwords. Check logs.")
+            await query.edit_message_text("❌ Ошибка отображения паролей. Проверьте логи.")
 
 # Add handler for admin menu callback
 async def handle_admin_callbacks(query, user_id):
     """Handle admin-specific callbacks"""
     if user_id not in ADMIN_IDS:
-        await query.answer("❌ Access denied")
+        await query.answer("❌ Доступ запрещён")
         return
     
     if query.data == "admin_menu":
         keyboard = [
-            [InlineKeyboardButton("📖 View All Passwords", callback_data="admin_all_page_1")],
-            [InlineKeyboardButton("📊 Detailed Stats", callback_data="admin_stats")],
-            [InlineKeyboardButton("📋 Export Data", callback_data="admin_export")]
+            [InlineKeyboardButton("📖 Все пароли", callback_data="admin_all_page_1")],
+            [InlineKeyboardButton("📊 Подробная статистика", callback_data="admin_stats")],
+            [InlineKeyboardButton("📋 Экспорт", callback_data="admin_export")]
         ]
         
         reply_markup = InlineKeyboardMarkup(keyboard)
         
         await query.edit_message_text(
-            "🔧 *Admin Panel*\n\nChoose an option:",
+            "🔧 *Панель администратора*\n\nВыберите действие:",
             reply_markup=reply_markup,
             parse_mode=ParseMode.MARKDOWN_V2
         )
@@ -1668,17 +1662,17 @@ async def handle_admin_callbacks(query, user_id):
     elif query.data == "admin_stats":
         stats = await get_all_passwords_stats()
         
-        stats_text = f"""📊 *Detailed Statistics*
+        stats_text = f"""📊 *Подробная статистика*
 
-🔐 Total passwords: {stats['total_passwords']}
-👥 Unique users: {stats['unique_users']}
+🔐 Всего паролей: {stats['total_passwords']}
+👥 Уникальных пользователей: {stats['unique_users']}
 
-📈 By generation type:"""
+📈 По типам генерации:"""
         
         for _, _, gen_type, count in stats['by_type']:
             stats_text += f"\n• {gen_type}: {count}"
         
-        keyboard = [[InlineKeyboardButton("🔙 Admin Panel", callback_data="admin_menu")]]
+        keyboard = [[InlineKeyboardButton("🔙 Панель администратора", callback_data="admin_menu")]]
         reply_markup = InlineKeyboardMarkup(keyboard)
         
         await query.edit_message_text(
@@ -1690,7 +1684,7 @@ async def handle_admin_callbacks(query, user_id):
     elif query.data == "admin_export":
         # Export database data
         try:
-            export_text = "📋 *Database Export*\n\n"
+            export_text = "📋 *Экспорт базы*\n\n"
             
             # Get all data
             async with aiosqlite.connect(DATABASE_PATH) as db:
@@ -1702,7 +1696,7 @@ async def handle_admin_callbacks(query, user_id):
                 """)
                 rows = await cursor.fetchall()
                 
-                export_text += f"📊 *Total records*: {len(rows)} (showing last 100)\n\n"
+                export_text += f"📊 *Всего записей*: {len(rows)} (показаны последние 100)\n\n"
                 
                 for i, (user_id, username, first_name, last_name, password, gen_type, created_at) in enumerate(rows[:20], 1):
                     user_info = f"@{username}" if username else f"{first_name or ''} {last_name or ''}".strip()
@@ -1713,9 +1707,9 @@ async def handle_admin_callbacks(query, user_id):
                     export_text += f"   👤 {escape_markdown_v2(user_info)} \\| 📅 {escape_markdown_v2(created_at)}\n\n"
                 
                 if len(rows) > 20:
-                    export_text += f"_\\.\\.\\. and {len(rows) - 20} more records_"
+                    export_text += f"_\\.\\.\\. и ещё {len(rows) - 20} записей_"
             
-            keyboard = [[InlineKeyboardButton("🔙 Admin Panel", callback_data="admin_menu")]]
+            keyboard = [[InlineKeyboardButton("🔙 Панель администратора", callback_data="admin_menu")]]
             reply_markup = InlineKeyboardMarkup(keyboard)
             
             await query.edit_message_text(
@@ -1727,8 +1721,8 @@ async def handle_admin_callbacks(query, user_id):
         except Exception as e:
             logger.error(f"Error exporting data: {e}")
             await query.edit_message_text(
-                f"❌ Error exporting data: {str(e)}",
-                reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🔙 Admin Panel", callback_data="admin_menu")]])
+                f"❌ Ошибка экспорта: {str(e)}",
+                reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🔙 Панель администратора", callback_data="admin_menu")]])
             )
 
 async def handle_text_messages(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -1757,18 +1751,18 @@ async def handle_text_messages(update: Update, context: ContextTypes.DEFAULT_TYP
     if state == ASK_SERVICE:
         if not text or len(text) > 100:
             await update.message.reply_text(
-                "❌ Invalid service name. Please provide a valid service name (max 100 characters).",
+                "❌ Некорректное название сервиса\\. Допустимая длина: до 100 символов\\.",
                 parse_mode=ParseMode.MARKDOWN_V2
             )
             return
 
         # Received service name
         context.user_data['service_name'] = text
-        keyboard = [[InlineKeyboardButton("⏭ Skip", callback_data="skip_username")]]
+        keyboard = [[InlineKeyboardButton("⏭ Пропустить", callback_data="skip_username")]]
         reply_markup = InlineKeyboardMarkup(keyboard)
         
         await update.message.reply_text(
-            f"✅ Service: *{escape_markdown_v2(text)}*\n\n👤 Now send your *username or email* for this service\n\n_Or click Skip if not needed_",
+            f"✅ Сервис: *{escape_markdown_v2(text)}*\n\n👤 Отправьте *логин или e\\-mail* для этого сервиса\n\n_Или нажмите «Пропустить»_",
             reply_markup=reply_markup,
             parse_mode=ParseMode.MARKDOWN_V2
         )
@@ -1777,7 +1771,7 @@ async def handle_text_messages(update: Update, context: ContextTypes.DEFAULT_TYP
     elif state == ASK_USERNAME:
         if len(text) > 200:
             await update.message.reply_text(
-                "❌ Username is too long. Please keep it under 200 characters.",
+                "❌ Логин слишком длинный\\. Допустимо до 200 символов\\.",
                 parse_mode=ParseMode.MARKDOWN_V2
             )
             return
@@ -1786,18 +1780,18 @@ async def handle_text_messages(update: Update, context: ContextTypes.DEFAULT_TYP
         context.user_data['username'] = text
         
         if context.user_data.get('is_saving_generated'):
-            keyboard = [[InlineKeyboardButton("⏭ Skip Notes", callback_data="skip_notes_generated")]]
+            keyboard = [[InlineKeyboardButton("⏭ Пропустить заметку", callback_data="skip_notes_generated")]]
             reply_markup = InlineKeyboardMarkup(keyboard)
             
             await update.message.reply_text(
-                f"✅ Username: *{escape_markdown_v2(text)}*\n\n📝 Send any *notes* \\(optional\\)\n\n_Or click Skip to save now_",
+                f"✅ Логин: *{escape_markdown_v2(text)}*\n\n📝 Отправьте *заметку* \\(необязательно\\)\n\n_Или нажмите «Пропустить», чтобы сохранить_",
                 reply_markup=reply_markup,
                 parse_mode=ParseMode.MARKDOWN_V2
             )
             context.user_data['conv_state'] = ASK_NOTES
         else:
             await update.message.reply_text(
-                f"✅ Username: *{escape_markdown_v2(text)}*\n\n🔐 Now send the *password* for this service",
+                f"✅ Логин: *{escape_markdown_v2(text)}*\n\n🔐 Отправьте *пароль* для этого сервиса",
                 parse_mode=ParseMode.MARKDOWN_V2
             )
             context.user_data['conv_state'] = ASK_PASSWORD
@@ -1805,24 +1799,24 @@ async def handle_text_messages(update: Update, context: ContextTypes.DEFAULT_TYP
     elif state == ASK_PASSWORD:
         if not text:
             await update.message.reply_text(
-                "❌ Password cannot be empty. Please provide a valid password.",
+                "❌ Пароль не может быть пустым\\.",
                 parse_mode=ParseMode.MARKDOWN_V2
             )
             return
         if len(text) > 500:
             await update.message.reply_text(
-                "❌ Password is too long. Please keep it under 500 characters.",
+                "❌ Пароль слишком длинный\\. Допустимо до 500 символов\\.",
                 parse_mode=ParseMode.MARKDOWN_V2
             )
             return
 
         # Received password
         context.user_data['password_to_save'] = text
-        keyboard = [[InlineKeyboardButton("⏭ Skip Notes", callback_data="skip_notes")]]
+        keyboard = [[InlineKeyboardButton("⏭ Пропустить заметку", callback_data="skip_notes")]]
         reply_markup = InlineKeyboardMarkup(keyboard)
         
         await update.message.reply_text(
-            "✅ Password received\n\n📝 Send any *notes* \\(optional\\)\n\n_Or click Skip to save now_",
+            "✅ Пароль получен\n\n📝 Отправьте *заметку* \\(необязательно\\)\n\n_Или нажмите «Пропустить», чтобы сохранить_",
             reply_markup=reply_markup,
             parse_mode=ParseMode.MARKDOWN_V2
         )
@@ -1831,7 +1825,7 @@ async def handle_text_messages(update: Update, context: ContextTypes.DEFAULT_TYP
     elif state == ASK_NOTES:
         if len(text) > 1000:
             await update.message.reply_text(
-                "❌ Notes are too long. Please keep them under 1000 characters.",
+                "❌ Заметка слишком длинная\\. Допустимо до 1000 символов\\.",
                 parse_mode=ParseMode.MARKDOWN_V2
             )
             return
@@ -1844,7 +1838,7 @@ async def handle_text_messages(update: Update, context: ContextTypes.DEFAULT_TYP
 
         if not service_name or not password:
             await update.message.reply_text(
-                "❌ Missing service or password\\. Please start over\\.",
+                "❌ Не хватает названия сервиса или пароля\\. Начните заново\\.",
                 parse_mode=ParseMode.MARKDOWN_V2
             )
             context.user_data.clear()
@@ -1854,23 +1848,23 @@ async def handle_text_messages(update: Update, context: ContextTypes.DEFAULT_TYP
         
         if success:
             keyboard = [
-                [InlineKeyboardButton("🔑 View Manager", callback_data="password_manager")],
-                [InlineKeyboardButton("🔙 Main Menu", callback_data="back_to_main")]
+                [InlineKeyboardButton("🔑 Открыть менеджер", callback_data="password_manager")],
+                [InlineKeyboardButton("🔙 Главное меню", callback_data="back_to_main")]
             ]
             reply_markup = InlineKeyboardMarkup(keyboard)
             
             safe_service = escape_markdown_v2(service_name)
-            safe_username = escape_markdown_v2(username) if username else '_not provided_'
+            safe_username = escape_markdown_v2(username) if username else '_не указан_'
             safe_notes = escape_markdown_v2(notes)
             
             await update.message.reply_text(
-                f"✅ *Password Saved Successfully\\!*\n\n📦 Service: *{safe_service}*\n👤 Username: {safe_username}\n🔐 Password: {safe_monospace_password(password)}\n📝 Notes: {safe_notes}",
+                f"✅ *Пароль успешно сохранён\\!*\n\n📦 Сервис: *{safe_service}*\n👤 Логин: {safe_username}\n🔐 Пароль: {safe_monospace_password(password)}\n📝 Заметка: {safe_notes}",
                 reply_markup=reply_markup,
                 parse_mode=ParseMode.MARKDOWN_V2
             )
         else:
             await update.message.reply_text(
-                "❌ Error saving password\\. Please try again\\.",
+                "❌ Не удалось сохранить пароль\\. Повторите попытку\\.",
                 parse_mode=ParseMode.MARKDOWN_V2
             )
         
@@ -1887,14 +1881,14 @@ async def delete_password_command(update: Update, context: ContextTypes.DEFAULT_
     try:
         password_id = int(command_text.split('_')[1])
     except (IndexError, ValueError):
-        await update.message.reply_text("❌ Invalid command format. Use: /delete_<id>")
+        await update.message.reply_text("❌ Неверный формат команды. Используйте: /delete_<id>")
         return
     
     # Verify password belongs to user
     password = await get_manager_password_by_id(user_id, password_id)
     
     if not password:
-        await update.message.reply_text("❌ Password not found or doesn't belong to you.")
+        await update.message.reply_text("❌ Пароль не найден или не принадлежит вам.")
         return
     
     # Delete password
@@ -1902,26 +1896,26 @@ async def delete_password_command(update: Update, context: ContextTypes.DEFAULT_
     
     if success:
         keyboard = [
-            [InlineKeyboardButton("🔑 View Manager", callback_data="password_manager")],
-            [InlineKeyboardButton("🔙 Main Menu", callback_data="back_to_main")]
+            [InlineKeyboardButton("🔑 Открыть менеджер", callback_data="password_manager")],
+            [InlineKeyboardButton("🔙 Главное меню", callback_data="back_to_main")]
         ]
         reply_markup = InlineKeyboardMarkup(keyboard)
         
         service_name = password[1]
         await update.message.reply_text(
-            f"✅ *Password Deleted*\n\n📦 Service: {escape_markdown_v2(service_name)} has been removed from your Password Manager\\.",
+            f"✅ *Пароль удалён*\n\n📦 Сервис: {escape_markdown_v2(service_name)} удалён из менеджера\\.",
             reply_markup=reply_markup,
             parse_mode=ParseMode.MARKDOWN_V2
         )
     else:
-        await update.message.reply_text("❌ Error deleting password. Please try again.")
+        await update.message.reply_text("❌ Не удалось удалить пароль. Повторите попытку.")
 
 async def db_info_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """Show database info (admin only)"""
     user_id = update.effective_user.id
     
     if user_id not in ADMIN_IDS:
-        await update.message.reply_text("❌ Access denied. This command is for administrators only.")
+        await update.message.reply_text("❌ Доступ запрещён. Команда доступна только администраторам.")
         return
     
     try:
@@ -1952,14 +1946,14 @@ async def db_info_command(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
             tables_str = ', '.join(tables_list)
             tables_str = escape_markdown_v2(tables_str)
             
-            info_text = f"""🗄️ *Database Info*
+            info_text = f"""🗄️ *Информация о базе*
 
-📊 *Statistics:*
-• Total passwords: {total_count[0] if total_count else 0}
-• Unique users: {users_count[0] if users_count else 0}
-• Tables: {tables_str}
+📊 *Статистика:*
+• Всего паролей: {total_count[0] if total_count else 0}
+• Уникальных пользователей: {users_count[0] if users_count else 0}
+• Таблицы: {tables_str}
 
-📝 *Recent entries:*"""
+📝 *Последние записи:*"""
 
             for i, (uid, username, password, gen_type, created_at) in enumerate(recent, 1):
                 user_info = f"@{username}" if username else f"ID:{uid}"
@@ -1973,7 +1967,7 @@ async def db_info_command(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
     except Exception as e:
         error_msg = escape_markdown_v2(str(e))
         await update.message.reply_text(
-            f"❌ Database error: {error_msg}",
+            f"❌ Ошибка базы: {error_msg}",
             parse_mode=ParseMode.MARKDOWN_V2
         )
 
